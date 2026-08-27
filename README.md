@@ -1,5 +1,7 @@
 # Haven — Airbnb Re-engagement
 
+[![Live at haven-airbnb-retarget](https://img.shields.io/badge/Live-haven--airbnb--retarget-FF385C?logo=github)](https://github.com/anupas777-hash/haven-airbnb-retarget)
+
 Internal tool for Airbnb hosts to win back lapsed guests via WhatsApp. Paste a Google Sheet, auto-map columns, score sentiment, define a group (date range + stars + tone + hand-picked), pick a ticket template with per-guest variables `{{name}} {{discount}} {{brand}}`, preview per guest, and post with live `queued → sent → delivered → read/failed` + retry. Dry-run by default, live via one-time Go-live wizard.
 
 ![Haven ledger](app/web/dist/assets/index-BapRHdIg.css)
