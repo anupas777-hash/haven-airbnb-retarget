@@ -1,0 +1,386 @@
+import { Router } from 'express';
+import { z } from 'zod';
+import { prisma } from '../repositories/prisma.js';
+import { ingestSheet } from '../services/ingestService.js';
+import { CustomerQuerySchema, IngestSourceSchema, CreateCampaignSchema, PatchCampaignSchema, SelectionSchema } from 'shared';
+import { cohortMatches } from '../domain/CohortRule.js';
+import { filterCustomers, createCampaign, patchCampaign, setSelection, resolveSelectionCustomerIds } from '../services/campaignService.js';
+import { previewMessage, sendCampaign, retryDelivery } from '../services/messagingService.js';
+import { config, COHORT_DEFAULT } from '../config/index.js';
+import { getWhatsAppProvider } from '../integrations/whatsapp/index.js';
+import { CompositeSheetsClient } from '../integrations/sheets/index.js';
+import { CloudApiProvider } from '../integrations/whatsapp/CloudApiProvider.js';
+import crypto from 'crypto';
+
+export const router = Router();
+
+function normalizeSheetUrl(url: string): string {
+  // Extract sheetId and return canonical URL to avoid duplicates like double pasted URLs
+  const m = url.match(/\/spreadsheets\/d\/([a-zA-Z0-9-_]+)/);
+  if (m) return `https://docs.google.com/spreadsheets/d/${m[1]}/edit`;
+  return url.trim();
+}
+
+function parseMaybeJson(v:any){
+  if (v==null) return null;
+  if (typeof v==='string') { try { return JSON.parse(v); } catch { return v; } }
+  return v;
+}
+function mapCampaign(c:any){
+  if (!c) return c;
+  return {
+    ...c,
+    cohortRule: parseMaybeJson(c.cohortRule),
+    filtersSnapshot: parseMaybeJson(c.filtersSnapshot),
+    selectedIds: parseMaybeJson(c.selectedIds),
+    deselectedIds: parseMaybeJson(c.deselectedIds),
+    selectionFilters: parseMaybeJson(c.selectionFilters),
+    template: c.template ? { ...c.template, variables: parseMaybeJson(c.template.variables) } : c.template,
+  };
+}
+function mapTemplate(t:any){
+  if (!t) return t;
+  return { ...t, variables: parseMaybeJson(t.variables) };
+}
+function mapSource(s:any){
+  if (!s) return s;
+  return { ...s, confirmedMapping: parseMaybeJson(s.confirmedMapping), detectedMapping: parseMaybeJson(s.detectedMapping) };
+}
+
+// ── Sources ──
+router.post('/sources', async (req,res,next)=>{
+  try {
+    const parsed = IngestSourceSchema.parse(req.body);
+    const normalized = normalizeSheetUrl(parsed.url);
+    const result = await ingestSheet(normalized, parsed.mapping || null);
+    res.json(result);
+  } catch(e){ next(e); }
+});
+
+router.get('/sources', async (_req,res,next)=>{
+  try {
+    const sources = await prisma.sheetSource.findMany({ orderBy:{ updatedAt:'desc' }});
+    res.json(sources.map(mapSource));
+  } catch(e){ next(e); }
+});
+
+router.get('/sources/:id/mapping', async (req,res,next)=>{
+  try {
+    const s = await prisma.sheetSource.findUnique({ where:{ id:req.params.id }});
+    if (!s) return res.status(404).json({ error:{ code:'NOT_FOUND', message:'Source not found'}});
+    res.json({ confirmedMapping: parseMaybeJson(s.confirmedMapping), detectedMapping: parseMaybeJson(s.detectedMapping), title: s.title, url: s.url });
+  } catch(e){ next(e); }
+});
+
+router.put('/sources/:id/mapping', async (req,res,next)=>{
+  try {
+    // body: { mapping: ColumnMapping, url?: string for re-ingest }
+    const mapping = req.body.mapping;
+    const s = await prisma.sheetSource.findUnique({ where:{ id:req.params.id }});
+    if (!s) return res.status(404).json({ error:{ code:'NOT_FOUND', message:'Source not found'}});
+    // persist and re-ingest
+    const result = await ingestSheet(s.url, mapping);
+    res.json(result);
+  } catch(e){ next(e); }
+});
+
+router.post('/sources/:id/bulk-opt-in', async (req,res,next)=>{
+  try {
+    const { value } = req.body; // true/false, default true if missing
+    const optIn = value === undefined ? true : !!value;
+    const source = await prisma.sheetSource.findUnique({ where:{ id:req.params.id }});
+    if (!source) return res.status(404).json({ error:{ code:'NOT_FOUND', message:'Source not found'}});
+    const updated = await prisma.customer.updateMany({ where:{ sourceId: req.params.id }, data:{ optInWhatsApp: optIn }});
+    res.json({ ok:true, count: updated.count, optIn });
+  } catch(e){ next(e); }
+});
+
+router.post('/sync', async (req,res,next)=>{
+  try {
+    const { sourceId, url } = req.body;
+    let sourceUrl = url ? normalizeSheetUrl(url) : url;
+    if (sourceId) {
+      const s = await prisma.sheetSource.findUnique({ where:{ id: sourceId }});
+      if (!s) return res.status(404).json({ error:{ code:'NOT_FOUND', message:'Source not found'}});
+      sourceUrl = s.url;
+    }
+    if (!sourceUrl) return res.status(400).json({ error:{ code:'BAD_REQUEST', message:'url or sourceId required'}});
+    const result = await ingestSheet(sourceUrl);
+    res.json(result);
+  } catch(e){ next(e); }
+});
+
+// ── Customers ──
+router.get('/customers', async (req,res,next)=>{
+  try {
+    const q = CustomerQuerySchema.parse(req.query);
+    // Build where? For now fetch all and filter in JS then paginate (ok for <50k)
+    // In production push to SQL.
+    let customers = await prisma.customer.findMany({ orderBy: [{ acquiredAt: 'desc' }, { name:'asc' }] });
+    // Determine cohort rule
+    let cohortRule: any = null;
+    if (q.campaignId) {
+      const camp = await prisma.campaign.findUnique({ where:{ id: q.campaignId }});
+      if (camp) cohortRule = parseMaybeJson(camp.cohortRule);
+    } else if (q.from || q.to) {
+      cohortRule = { type:'customRange', from: q.from ? new Date(q.from).toISOString(): undefined, to: q.to ? new Date(q.to).toISOString(): undefined };
+    } else if (q.acquiredFromDays!==undefined || q.acquiredToDays!==undefined) {
+      // map to lastNDays window if both present else simple filter
+      if (q.acquiredFromDays!==undefined && q.acquiredToDays!==undefined) {
+        cohortRule = { type:'lastNDays', fromDaysAgo: q.acquiredToDays, toDaysAgo: q.acquiredFromDays };
+      } else if (q.acquiredFromDays!==undefined) {
+        cohortRule = { type:'lastNDays', days: q.acquiredFromDays };
+      }
+    } else {
+      // default cohort 30-37 days ago
+      cohortRule = { type:'lastNDays', fromDaysAgo: 37, toDaysAgo: 30 };
+      // But allow optedInOnly etc still; if user wants all, they can override via fromDays?
+      // Spec says default 30-day cohort applied automatically. So default.
+      // However if client passes no cohort, we apply default.
+      // To allow "all" we need an explicit flag — for now if no cohortRule, default.
+    }
+
+    // Apply filters
+    const filtered = customers.filter(c=>{
+      if (cohortRule && !cohortMatches(c.acquiredAt, cohortRule)) return false;
+      if (q.optedInOnly && !c.optInWhatsApp) return false;
+      if (q.minRating!==undefined && (c.rating==null || c.rating < q.minRating)) return false;
+      if (q.maxRating!==undefined && (c.rating==null || c.rating > q.maxRating)) return false;
+      if (q.sentiment && (q.sentiment as string[]).length && !(q.sentiment as string[]).includes(c.sentimentLabel)) return false;
+      if (q.search) {
+        const s = q.search.toLowerCase();
+        if (!c.name.toLowerCase().includes(s) && !(c.comment||'').toLowerCase().includes(s) && !(c.phoneRaw||'').toLowerCase().includes(s) && !(c.email||'').toLowerCase().includes(s)) return false;
+      }
+      return true;
+    });
+
+    // Sorting
+    if (q.sort) {
+      const [field, dir] = q.sort.split(':');
+      filtered.sort((a,b)=>{
+        const av = (a as any)[field]; const bv=(b as any)[field];
+        if (av==null && bv==null) return 0;
+        if (av==null) return 1;
+        if (bv==null) return -1;
+        if (av < bv) return dir==='asc'? -1:1;
+        if (av > bv) return dir==='asc'? 1:-1;
+        return 0;
+      });
+    }
+
+    const total = filtered.length;
+    const start = (q.page-1)*q.pageSize;
+    const pageItems = filtered.slice(start, start+q.pageSize);
+
+    // Also compute stats for UI: counts per sentiment, rating, excluded
+    const allForStats = customers;
+    const excludedNoOptIn = allForStats.filter(c=>!c.optInWhatsApp).length;
+    const excludedBadPhone = allForStats.filter(c=>!c.phoneValid).length;
+    const excludedBadDate = allForStats.filter(c=>!c.acquiredAt).length;
+
+    res.json({
+      items: pageItems.map(c=> ({
+        ...c,
+        phoneMasked: c.phoneE164 ? c.phoneE164.slice(0,-4).replace(/./g,'•')+c.phoneE164.slice(-4) : '—',
+        // keep raw for debug but mask in UI
+      })),
+      total,
+      page: q.page,
+      pageSize: q.pageSize,
+      totalPages: Math.ceil(total/q.pageSize),
+      stats: { excludedNoOptIn, excludedBadPhone, excludedBadDate },
+      cohortRule,
+    });
+  } catch(e){ next(e); }
+});
+
+// ── Campaigns ──
+router.post('/campaigns', async (req,res,next)=>{
+  try {
+    const parsed = CreateCampaignSchema.parse(req.body);
+    const camp = await createCampaign(parsed);
+    res.status(201).json(mapCampaign(camp));
+  } catch(e){ next(e); }
+});
+
+router.get('/campaigns', async (_req,res,next)=>{
+  try {
+    const camps = await prisma.campaign.findMany({ orderBy:{ updatedAt:'desc' }, include:{ template:true }});
+    res.json(camps.map(mapCampaign));
+  } catch(e){ next(e); }
+});
+
+router.get('/campaigns/:id', async (req,res,next)=>{
+  try {
+    const c = await prisma.campaign.findUnique({ where:{ id:req.params.id }, include:{ template:true, deliveries:true }});
+    if (!c) return res.status(404).json({ error:{ code:'NOT_FOUND', message:'Campaign not found'}});
+    res.json(mapCampaign(c));
+  } catch(e){ next(e); }
+});
+
+router.patch('/campaigns/:id', async (req,res,next)=>{
+  try {
+    const parsed = PatchCampaignSchema.parse(req.body);
+    const c = await patchCampaign(req.params.id, parsed);
+    res.json(mapCampaign(c));
+  } catch(e){ next(e); }
+});
+
+router.post('/campaigns/:id/selection', async (req,res,next)=>{
+  try {
+    const parsed = SelectionSchema.parse(req.body);
+    const c = await setSelection(req.params.id, parsed);
+    res.json(mapCampaign(c));
+  } catch(e){ next(e); }
+});
+
+router.get('/campaigns/:id/preview', async (req,res,next)=>{
+  try {
+    const campaignRaw = await prisma.campaign.findUnique({ where:{ id:req.params.id }, include:{ template:true }});
+    if (!campaignRaw) return res.status(404).json({ error:{ code:'NOT_FOUND', message:'Campaign not found'}});
+    const campaign = mapCampaign(campaignRaw);
+    const customerId = req.query.customerId as string;
+    const discountOverride = req.query.discountPercent ? parseInt(req.query.discountPercent as string,10) : campaign.discountPercent;
+    const templateId = req.query.templateId as string | undefined;
+    let templateBody = (campaign.template as any)?.body;
+    if (templateId) {
+      const t = await prisma.messageTemplate.findUnique({ where:{ id: templateId }});
+      if (t) templateBody = t.body;
+    }
+    if (!templateBody) templateBody = `Hi {{name}} — we miss you at ${config.brandName}! Here's {{discount}} off your next visit.`;
+    if (!customerId) return res.status(400).json({ error:{ code:'BAD_REQUEST', message:'customerId required'}});
+    const customer = await prisma.customer.findUnique({ where:{ id: customerId }});
+    if (!customer) return res.status(404).json({ error:{ code:'NOT_FOUND', message:'Customer not found'}});
+    const rendered = previewMessage(templateBody, customer, discountOverride, config.brandName);
+    // validation: missing variables?
+    const missing: string[] = [];
+    if (!customer.name) missing.push('name');
+    res.json({ rendered, body: templateBody, customer: { id: customer.id, name: customer.name, phoneMasked: customer.phoneE164 ? '••••'+customer.phoneE164.slice(-4): '—' }, discountPercent: discountOverride, missing });
+  } catch(e){ next(e); }
+});
+
+router.post('/campaigns/:id/send', async (req,res,next)=>{
+  try {
+    const result = await sendCampaign(req.params.id, config.brandName);
+    res.json(result);
+  } catch(e){ next(e); }
+});
+
+router.get('/campaigns/:id/deliveries', async (req,res,next)=>{
+  try {
+    const dels = await prisma.delivery.findMany({ where:{ campaignId:req.params.id }, include:{ customer:true }, orderBy:{ updatedAt:'desc' }});
+    res.json(dels.map(d=> ({
+      ...d,
+      customer: d.customer ? { id: d.customer.id, name: d.customer.name, phoneMasked: d.customer.phoneE164 ? '••••'+d.customer.phoneE164.slice(-4): d.customer.phoneRaw, phoneE164: d.customer.phoneE164 } : null
+    })));
+  } catch(e){ next(e); }
+});
+
+router.post('/campaigns/:id/deliveries/:customerId/retry', async (req,res,next)=>{
+  try {
+    const r = await retryDelivery(req.params.id, req.params.customerId, config.brandName);
+    res.json(r);
+  } catch(e){ next(e); }
+});
+
+// ── Templates ──
+router.get('/templates', async (_req,res,next)=>{
+  try {
+    const t = await prisma.messageTemplate.findMany({ orderBy:{ updatedAt:'desc' }});
+    res.json(t.map(mapTemplate));
+  } catch(e){ next(e); }
+});
+
+router.post('/templates', async (req,res,next)=>{
+  try {
+    const { name, body, variables, whatsappTemplateName, locale, status } = req.body;
+    if (!name || !body) return res.status(400).json({ error:{ code:'BAD_REQUEST', message:'name and body required'}});
+    const created = await prisma.messageTemplate.create({ data:{
+      name, body, variables: JSON.stringify(variables || [{key:'1', mappedTo:'name'},{key:'2', mappedTo:'discount'}]),
+      whatsappTemplateName: whatsappTemplateName || null,
+      locale: locale || 'en_US',
+      status: status || 'draft',
+    }});
+    res.status(201).json(mapTemplate(created));
+  } catch(e){ next(e); }
+});
+
+// ── Setup / Go-live wizard ──
+router.get('/setup/status', async (_req,res)=>{
+  const saEmail = config.google.serviceAccountEmail || null;
+  const whatsappConfigured = !!config.whatsapp.phoneNumberId && !!config.whatsapp.accessToken;
+  // we don't store lastTest; for now null
+  res.json({
+    mode: config.isDryRun() ? 'dry-run' : 'live',
+    sheet: { configured: config.isSheetServiceAccountConfigured(), canReadPublic: true, serviceAccountEmail: saEmail, lastTest: null, lastError: null },
+    whatsapp: { configured: whatsappConfigured, canSend: whatsappConfigured, phoneNumberId: whatsappConfigured ? config.whatsapp.phoneNumberId : null, lastTest: null, lastError: null },
+    brandName: config.brandName,
+    defaultDiscountPercent: config.defaultDiscountPercent,
+  });
+});
+
+router.post('/setup/test-sheet', async (req,res,next)=>{
+  try {
+    const { url } = req.body;
+    if (!url) return res.status(400).json({ error:{ code:'BAD_REQUEST', message:'url required'}});
+    const client = new CompositeSheetsClient();
+    const r = await client.testConnection(url);
+    if (r.ok) return res.json({ ok:true, title: r.title });
+    return res.status(422).json({ ok:false, error: r.error });
+  } catch(e){ next(e); }
+});
+
+router.post('/setup/test-whatsapp', async (req,res)=>{
+  const provider = getWhatsAppProvider();
+  if (provider.name==='console') {
+    // In dry-run, simulate test
+    const { to } = req.body;
+    if (to) {
+      // try console send
+      await provider.sendTemplate({ toE164: to, templateName:'hello_world', locale:'en_US', variables:[], customerId:'test', campaignId:'test' });
+    }
+    return res.json({ ok:true, mode:'dry-run', message:'Dry-run: message simulated (no real WhatsApp). Configure WHATSAPP_* env to go live.' });
+  }
+  // live path: try to fetch phone number info
+  try {
+    const url = `https://graph.facebook.com/v21.0/${config.whatsapp.phoneNumberId}?fields=verified_name,code_verification_status,display_phone_number,quality_rating`;
+    const resp = await fetch(url, { headers:{ Authorization:`Bearer ${config.whatsapp.accessToken}` }});
+    const json:any = await resp.json();
+    if (!resp.ok) return res.status(422).json({ ok:false, error: json?.error?.message || `HTTP ${resp.status}`, details: json });
+    return res.json({ ok:true, mode:'live', details: json });
+  } catch (e:any) {
+    return res.status(500).json({ ok:false, error: e.message });
+  }
+});
+
+// ── Webhooks WhatsApp ──
+router.get('/webhooks/whatsapp', (req,res)=>{
+  const mode = req.query['hub.mode'] as string;
+  const token = req.query['hub.verify_token'] as string;
+  const challenge = req.query['hub.challenge'] as string;
+  const provider: any = getWhatsAppProvider();
+  const result = provider.verifyWebhook ? provider.verifyWebhook(mode, token, challenge) : { ok: mode==='subscribe' && token===config.whatsapp.verifyToken, challenge };
+  if (result.ok) return res.status(200).send(result.challenge || challenge);
+  return res.sendStatus(403);
+});
+
+router.post('/webhooks/whatsapp', async (req,res,next)=>{
+  try {
+    // Verify signature if CloudApiProvider
+    const provider: any = getWhatsAppProvider();
+    if (provider instanceof CloudApiProvider) {
+      const rawBody = JSON.stringify(req.body);
+      const sig = req.headers['x-hub-signature-256'] as string | undefined;
+      if (config.whatsapp.appSecret && sig && !provider.verifySignature(rawBody, sig)) {
+        return res.status(401).json({ error:{ code:'INVALID_SIGNATURE', message:'Webhook signature mismatch' }});
+      }
+      await provider.handleStatusWebhook(req.body);
+    } else if (provider.handleStatusWebhook) {
+      await provider.handleStatusWebhook(req.body);
+    }
+    res.sendStatus(200);
+  } catch(e){ next(e); }
+});
+
+// ── Health ──
+router.get('/health', (_req,res)=> res.json({ ok:true, time: new Date().toISOString(), mode: config.isDryRun() ? 'dry-run':'live' }));

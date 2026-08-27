@@ -1,0 +1,102 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model Customer {
+  id              String   @id @default(cuid())
+  name            String
+  phoneRaw        String
+  phoneE164       String?
+  phoneValid      Boolean  @default(false)
+  acquiredAt      DateTime?
+  acquiredAtRaw   String?
+  rating          Int?
+  comment         String?
+  sentimentLabel  String   @default("neutral") // positive|neutral|negative
+  sentimentScore  Float    @default(0)
+  sentimentHash   String?
+  optInWhatsApp   Boolean  @default(false)
+  email           String?
+  sheetRowKey     String   @unique
+  sourceId        String?
+  source          SheetSource? @relation(fields: [sourceId], references: [id])
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  deliveries      Delivery[]
+
+  @@index([acquiredAt])
+  @@index([rating])
+  @@index([sentimentLabel])
+  @@index([phoneE164])
+}
+
+model SheetSource {
+  id               String   @id @default(cuid())
+  url              String   @unique
+  sheetId          String?
+  title            String   @default("Customer Sheet")
+  confirmedMapping String?
+  detectedMapping  String?
+  lastSyncedAt     DateTime?
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  customers        Customer[]
+}
+
+model Campaign {
+  id              String   @id @default(cuid())
+  name            String
+  cohortRule      String
+  discountPercent Int      @default(10)
+  templateId      String?
+  template        MessageTemplate? @relation(fields: [templateId], references: [id])
+  status          String   @default("draft") // draft|queued|sending|completed|failed
+  filtersSnapshot String?
+  selectionMode   String   @default("none") // none|ids|allMatching
+  selectedIds     String?    // JSON string[]
+  deselectedIds   String?    // JSON for allMatching
+  selectionFilters String?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  deliveries      Delivery[]
+}
+
+model MessageTemplate {
+  id                    String   @id @default(cuid())
+  name                  String   @unique
+  channel               String   @default("whatsapp")
+  whatsappTemplateName  String?
+  locale                String   @default("en_US")
+  body                  String
+  variables             String     // JSON [{key,mappedTo}]
+  status                String   @default("draft")
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
+
+  campaigns             Campaign[]
+}
+
+model Delivery {
+  id                String   @id @default(cuid())
+  campaignId        String
+  campaign          Campaign @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  customerId        String
+  customer          Customer @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  status            String   @default("queued") // queued|sent|delivered|read|failed
+  providerMessageId String?
+  error             String?
+  attempt           Int      @default(0)
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  @@unique([campaignId, customerId])
+  @@index([status])
+}

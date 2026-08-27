@@ -1,0 +1,28 @@
+{
+  "name": "retargeting-app",
+  "private": true,
+  "version": "0.1.0",
+  "workspaces": [
+    "app/web",
+    "app/server",
+    "shared"
+  ],
+  "scripts": {
+    "dev": "concurrently \"npm:dev --workspace=app/server\" \"npm:dev --workspace=app/web\"",
+    "dev:server": "npm run dev --workspace=app/server",
+    "dev:web": "npm run dev --workspace=app/web",
+    "build": "npm run build --workspace=shared && npm run build --workspace=app/server && npm run build --workspace=app/web",
+    "test": "npm run test --workspace=app/server",
+    "lint": "eslint .",
+    "prisma:generate": "npm run prisma:generate --workspace=app/server",
+    "prisma:migrate": "npm run prisma:migrate --workspace=app/server"
+  },
+  "devDependencies": {
+    "@types/supertest": "^7.2.1",
+    "concurrently": "^9.1.2",
+    "typescript": "^5.7.3"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
