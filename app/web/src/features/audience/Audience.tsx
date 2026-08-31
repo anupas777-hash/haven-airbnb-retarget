@@ -41,10 +41,26 @@ export function Audience({
   onSelectAllMatching,
 }: Props) {
   const [page, setPage] = useState(1);
+  const [sort, setSort] = useState('acquiredAt:desc');
   const pageSize = 50;
   const scrollRef = useRef<HTMLDivElement>(null);
 
-  const queryKey = ['customers', { search, minRating, maxRating, sentiment, page, campaignId }];
+  function handleSort(field: string) {
+    const [currField, currDir] = sort.split(':');
+    if (currField === field) {
+      setSort(`${field}:${currDir === 'asc' ? 'desc' : 'asc'}`);
+    } else {
+      setSort(`${field}:${field === 'name' || field === 'acquiredAt' ? 'asc' : 'desc'}`);
+    }
+    setPage(1);
+  }
+  const SortArrow = ({ field }: { field: string }) => {
+    const [f, dir] = sort.split(':');
+    if (f !== field) return <span className="opacity-30 ml-1">↕</span>;
+    return <span className="ml-1">{dir === 'asc' ? '↑' : '↓'}</span>;
+  };
+
+  const queryKey = ['customers', { search, minRating, maxRating, sentiment, page, campaignId, sort }];
   const { data, isLoading, refetch } = useQuery({
     queryKey,
     queryFn: () =>
@@ -56,6 +72,7 @@ export function Audience({
         page,
         pageSize,
         campaignId: campaignId || undefined,
+        sort,
       }),
   });
 
@@ -90,7 +107,7 @@ export function Audience({
 
   useEffect(() => {
     setPage(1);
-  }, [search, minRating, maxRating, sentiment, campaignId]);
+  }, [search, minRating, maxRating, sentiment, campaignId, sort]);
 
   const virtualizer = useVirtualizer({
     count: items.length,
@@ -185,10 +202,10 @@ export function Audience({
               <tr>
                 <th className="p-2.5 w-8"><input type="checkbox" disabled className="accent-ink" /></th>
                 <th className="p-2.5 w-12 text-center">Stays</th>
-                <th className="p-2.5 text-left">Guest</th>
-                <th className="p-2.5 text-left">Phone</th>
-                <th className="p-2.5 text-left">First stay</th>
-                <th className="p-2.5 text-left">Stars</th>
+                <th className="p-2.5 text-left cursor-pointer select-none hover:text-ink" onClick={() => handleSort('name')}>Guest <SortArrow field="name" /></th>
+                <th className="p-2.5 text-left cursor-pointer select-none hover:text-ink" onClick={() => handleSort('phoneE164')}>Phone <SortArrow field="phoneE164" /></th>
+                <th className="p-2.5 text-left cursor-pointer select-none hover:text-ink" onClick={() => handleSort('acquiredAt')}>First stay <SortArrow field="acquiredAt" /></th>
+                <th className="p-2.5 text-left cursor-pointer select-none hover:text-ink" onClick={() => handleSort('rating')}>Stars <SortArrow field="rating" /></th>
                 <th className="p-2.5 text-left">Your notes</th>
                 <th className="p-2.5 text-left">Reviews</th>
               </tr>
