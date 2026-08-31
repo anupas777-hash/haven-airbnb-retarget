@@ -4,36 +4,36 @@ export default {
   theme: {
     extend: {
       colors: {
-        ink: "#121A2B",
-        paper: "#F7F3E9",
-        fog: "#E7E0D1",
-        brass: "#C8A96A",
-        moss: "#5B6B53",
-        signal: "#C53A2E",
-        stone: "#8A8278",
-        border: "#E7E0D1",
-        muted: "#F2EDE3",
+        ink: "#0F172A",
+        paper: "#FFFFFF",
+        surface: "#F8FAFC",
+        fog: "#E2E8F0",
+        stone: "#64748B",
+        brass: "#FF385C",
+        accent: "#FF385C",
+        moss: "#10B981",
+        signal: "#EF4444",
+        border: "#E2E8F0",
+        muted: "#F1F5F9",
       },
       fontFamily: {
-        display: ['Fraunces','serif'],
-        sans: ['DM Sans','ui-sans-serif','system-ui'],
-        mono: ['JetBrains Mono','ui-monospace','monospace'],
+        sans: ['Geist','Inter','Helvetica Neue','Helvetica','Arial','sans-serif'],
+        display: ['Geist','Inter','Helvetica Neue','Helvetica','Arial','sans-serif'],
+        mono: ['Geist Mono','JetBrains Mono','monospace'],
       },
       borderRadius: {
-        xl: "16px",
-        '2xl': "20px",
+        xl: "12px",
+        '2xl': "16px",
       },
       boxShadow: {
-        paper: "0 8px 30px rgba(18,26,43,0.08), 0 1px 3px rgba(18,26,43,0.08)",
-        ticket: "0 12px 40px rgba(18,26,43,0.12), 0 2px 8px rgba(18,26,43,0.06)",
+        card: "0 1px 3px rgba(15,23,42,0.08), 0 4px 12px rgba(15,23,42,0.05)",
+        lift: "0 4px 16px rgba(15,23,42,0.08), 0 2px 6px rgba(15,23,42,0.06)",
       },
       keyframes: {
-        stamp: { "0%": { transform: "scale(1.4) rotate(-6deg)", opacity:"0" }, "100%": { transform: "scale(1) rotate(-2deg)", opacity:"1" } },
-        rise: { "0%": { transform: "translateY(6px)", opacity:"0"}, "100%": {transform:"translateY(0)", opacity:"1"} },
+        in: { "0%": { opacity:"0", transform:"translateY(4px)" }, "100%": { opacity:"1", transform:"translateY(0)" } },
       },
       animation: {
-        stamp: "stamp 420ms cubic-bezier(0.34,1.56,0.64,1) forwards",
-        rise: "rise 520ms ease-out forwards",
+        in: "in 240ms ease-out forwards",
       }
     }
   },

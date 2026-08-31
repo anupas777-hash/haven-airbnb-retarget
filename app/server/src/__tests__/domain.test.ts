@@ -6,8 +6,9 @@ import { analyzeSentiment } from '../domain/Sentiment.js';
 import { interpolateTemplate } from 'shared';
 
 describe('E164Phone', () => {
-  it('normalizes US 10-digit to +1', () => {
-    expect(normalizePhone('415-555-0101').e164).toBe('+14155550101');
+  it('normalizes 10-digit to +91 (Indian default for this portfolio)', () => {
+    expect(normalizePhone('9606448030').e164).toBe('+919606448030');
+    expect(normalizePhone('415-555-0101').e164).toBe('+914155550101');
     expect(normalizePhone('(415) 555-0101').valid).toBe(true);
   });
   it('handles + prefix', () => {

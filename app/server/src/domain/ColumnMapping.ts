@@ -9,6 +9,7 @@ const SYNONYMS: Record<LogicalField, string[]> = {
   comment: ['comment','feedback','review','notes','message','remarks','opinion','testimonial'],
   opt_in_whatsapp: ['opt in','consent','whatsapp ok','subscribed','opt_in','optin','whatsapp','opt in whatsapp','whatsapp opt in','marketing consent','opt-in'],
   email: ['email','e-mail','mail','email address','e mail'],
+  key_attributes: ['key attributes','key attributes of customer','attributes','host notes','judgment','judgement','host judgment','notes','key attribute'],
 };
 
 function normalizeHeader(h: string): string {
@@ -31,10 +32,10 @@ function normalizeForCompare(s: string): string {
  */
 export function detectColumnMapping(headers: string[]): { mapping: ColumnMapping; confidence: Record<LogicalField, number> } {
   const mapping: ColumnMapping = {
-    name: null, phone: null, acquired_at: null, rating: null, comment: null, opt_in_whatsapp: null, email: null,
+    name: null, phone: null, acquired_at: null, rating: null, comment: null, opt_in_whatsapp: null, email: null, key_attributes: null,
   };
   const confidence: Record<LogicalField, number> = {
-    name: 0, phone: 0, acquired_at: 0, rating: 0, comment: 0, opt_in_whatsapp: 0, email: 0,
+    name: 0, phone: 0, acquired_at: 0, rating: 0, comment: 0, opt_in_whatsapp: 0, email: 0, key_attributes: 0,
   };
   const usedHeaders = new Set<string>();
 

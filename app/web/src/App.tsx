@@ -335,7 +335,7 @@ function Shell() {
 
                   <Card className="p-6">
                     <h3 className="font-medium">Hand-pick</h3>
-                    <p className="text-xs text-stone mt-1">Add anyone beyond filters. Each gets the same ticket, stamped per guest.</p>
+                    <p className="text-xs text-stone mt-1">Add anyone beyond filters. Each gets the same message.</p>
                     <div className="relative mt-4">
                       <input placeholder="Search name, email, phone…" value={manualQuery} onChange={e=>setManualQuery(e.target.value)} disabled={selectAllMatching} className="flex h-9 w-full rounded-full border border-fog bg-white px-4 text-sm disabled:opacity-50" />
                       {manualQuery.length>=2 && manualResultsDefine.length>0 && (
@@ -494,23 +494,35 @@ function TemplatesPane() {
   return (
     <div className="max-w-[720px] mx-auto space-y-6">
       <div>
-        <h1 className="display text-2xl font-semibold">Tickets</h1>
-        <p className="text-stone text-sm mt-1">Same ticket to the set, stamped per guest with <span className="font-mono text-xs bg-surface border border-fog px-1 rounded">{"{{name}} {{discount}}"}</span>.</p>
+        <h1 className="display text-2xl font-semibold">Messages</h1>
+        <p className="text-stone text-sm mt-1">Same message to the set with <span className="font-mono text-xs bg-surface border border-fog px-1 rounded">{"{{name}} {{discount}}"}</span>.</p>
       </div>
       <Card className="p-6 space-y-3">
-        <h3 className="font-medium">New ticket</h3>
+        <h3 className="font-medium">New message</h3>
         <input value={name} onChange={e=>setName(e.target.value)} placeholder="Name - e.g. Haven · VIP 20%" className="w-full h-9 rounded-full border border-fog bg-white px-4 text-sm" />
         <textarea value={body} onChange={e=>setBody(e.target.value)} rows={3} className="w-full rounded-xl border border-fog p-3 text-sm" />
         <input value={wpName} onChange={e=>setWpName(e.target.value)} placeholder="WhatsApp name" className="w-full h-9 rounded-full border border-fog bg-white px-4 text-sm" />
         {error && <div className="text-sm text-signal bg-red-50 border p-2 rounded-xl">{error}</div>}
-        <Button onClick={handleCreate} disabled={saving} className="rounded-full">{saving?'Saving…':'Save ticket'}</Button>
+        <Button onClick={handleCreate} disabled={saving} className="rounded-full">{saving?'Saving…':'Save message'}</Button>
       </Card>
       <div className="grid gap-3">
         {templates?.map((t:any)=>(
           <Card key={t.id} className="p-4">
-            <div className="font-medium">{t.name}</div>
+            <div className="flex items-start justify-between gap-3">
+              <div className="font-medium flex-1">{t.name}</div>
+              <button
+                onClick={async () => {
+                  if (!confirm(`Delete "${t.name}"?`)) return;
+                  await api.deleteTemplate(t.id);
+                  refetch();
+                }}
+                className="w-7 h-7 rounded-full border border-fog grid place-items-center text-stone hover:bg-surface shrink-0"
+                title="Delete template"
+              >
+                ×
+              </button>
+            </div>
             <div className="text-sm bg-surface border border-fog rounded-xl p-3 mt-2 whitespace-pre-wrap">{t.body}</div>
-            <div className="text-xs text-stone mt-2">{t.whatsappTemplateName} · {t.locale}</div>
           </Card>
         ))}
       </div>
@@ -543,7 +555,7 @@ function GoLiveWizard({ onClose }: { onClose: () => void }) {
       </Card>
       <Card className="p-6">
         <h3 className="font-medium">Postmark WhatsApp</h3>
-        <p className="text-sm text-stone mt-1">Marketing outside 24h needs approved ticket with <span className="font-mono text-xs">{"{{1}} {{2}}"}</span>.</p>
+        <p className="text-sm text-stone mt-1">Marketing outside 24h needs approved message with <span className="font-mono text-xs">{"{{1}} {{2}}"}</span>.</p>
         {setup?.whatsapp?.phoneNumberId && <div className="mt-3 text-xs bg-surface border rounded-xl p-3">Phone ID · {setup.whatsapp.phoneNumberId}</div>}
         <Button disabled={loadingWa} onClick={async()=>{setLoadingWa(true);try{const r=await api.testWhatsapp();setWaResult(r);}catch(e:any){setWaResult({ok:false,error:e.message});}setLoadingWa(false);refetch();}} className="rounded-full mt-3">{loadingWa?'Checking…':'Test'}</Button>
         {waResult && <div className={`mt-3 text-sm rounded-xl p-3 border ${waResult.ok?'bg-emerald-50':'bg-red-50'}`}>{waResult.ok?`✓ ${waResult.mode}`:`✗ ${waResult.error}`}</div>}

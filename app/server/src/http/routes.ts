@@ -114,10 +114,7 @@ router.post('/sync', async (req,res,next)=>{
 router.get('/customers', async (req,res,next)=>{
   try {
     const q = CustomerQuerySchema.parse(req.query);
-    // Build where? For now fetch all and filter in JS then paginate (ok for <50k)
-    // In production push to SQL.
-    let customers = await prisma.customer.findMany({ orderBy: [{ acquiredAt: 'desc' }, { name:'asc' }] });
-    // Determine cohort rule
+    // Determine cohort rule - previous guests
     let cohortRule: any = null;
     if (q.campaignId) {
       const camp = await prisma.campaign.findUnique({ where:{ id: q.campaignId }});
@@ -125,21 +122,50 @@ router.get('/customers', async (req,res,next)=>{
     } else if (q.from || q.to) {
       cohortRule = { type:'customRange', from: q.from ? new Date(q.from).toISOString(): undefined, to: q.to ? new Date(q.to).toISOString(): undefined };
     } else if (q.acquiredFromDays!==undefined || q.acquiredToDays!==undefined) {
-      // map to lastNDays window if both present else simple filter
       if (q.acquiredFromDays!==undefined && q.acquiredToDays!==undefined) {
         cohortRule = { type:'lastNDays', fromDaysAgo: q.acquiredToDays, toDaysAgo: q.acquiredFromDays };
       } else if (q.acquiredFromDays!==undefined) {
         cohortRule = { type:'lastNDays', days: q.acquiredFromDays };
       }
     } else {
-      // default cohort 30-37 days ago
-      cohortRule = { type:'lastNDays', fromDaysAgo: 37, toDaysAgo: 30 };
-      // But allow optedInOnly etc still; if user wants all, they can override via fromDays?
-      // Spec says default 30-day cohort applied automatically. So default.
-      // However if client passes no cohort, we apply default.
-      // To allow "all" we need an explicit flag — for now if no cohortRule, default.
+      cohortRule = null;
     }
 
+    // Build Prisma where for cohort (push to SQL) + rating/sentiment
+    const where: any = {};
+    if (cohortRule) {
+      if (cohortRule.type === 'customRange') {
+        if (cohortRule.from) where.acquiredAt = { ...(where.acquiredAt||{}), gte: new Date(cohortRule.from) };
+        if (cohortRule.to) {
+          const to = new Date(cohortRule.to);
+          to.setHours(23,59,59,999);
+          where.acquiredAt = { ...(where.acquiredAt||{}), lte: to };
+        }
+      } else if (cohortRule.type === 'lastNDays') {
+        if (cohortRule.fromDaysAgo !== undefined && cohortRule.toDaysAgo !== undefined) {
+          const from = new Date(); from.setHours(0,0,0,0); from.setDate(from.getDate() - Math.max(cohortRule.fromDaysAgo, cohortRule.toDaysAgo));
+          const to = new Date(); to.setHours(23,59,59,999); to.setDate(to.getDate() - Math.min(cohortRule.fromDaysAgo, cohortRule.toDaysAgo));
+          where.acquiredAt = { gte: from, lte: to };
+        } else if (cohortRule.days) {
+          const from = new Date(); from.setHours(0,0,0,0); from.setDate(from.getDate() - cohortRule.days);
+          where.acquiredAt = { gte: from };
+        }
+      }
+    }
+    if (q.minRating !== undefined) where.rating = { ...(where.rating||{}), gte: q.minRating };
+    if (q.maxRating !== undefined) where.rating = { ...(where.rating||{}), lte: q.maxRating };
+    if (q.sentiment && (q.sentiment as string[]).length) where.sentimentLabel = { in: q.sentiment as string[] };
+
+    // Search still needs JS for keyAttributes (not indexed) - fetch with where then filter
+    let customers = await prisma.customer.findMany({ where, orderBy: [{ acquiredAt: 'desc' }, { name:'asc' }] });
+
+    // Compute repeat counts from all customers (for accurate stays)
+    const allForRepeat = await prisma.customer.findMany({ select: { phoneE164: true, phoneRaw: true, name: true } });
+    const repeatMap = new Map<string, number>();
+    for (const c of allForRepeat) {
+      const key = c.phoneE164 || c.phoneRaw.replace(/\D/g,'') || c.name.toLowerCase().trim();
+      repeatMap.set(key, (repeatMap.get(key) || 0) + 1);
+    }
     // Apply filters
     const filtered = customers.filter(c=>{
       if (cohortRule && !cohortMatches(c.acquiredAt, cohortRule)) return false;
@@ -149,7 +175,7 @@ router.get('/customers', async (req,res,next)=>{
       if (q.sentiment && (q.sentiment as string[]).length && !(q.sentiment as string[]).includes(c.sentimentLabel)) return false;
       if (q.search) {
         const s = q.search.toLowerCase();
-        if (!c.name.toLowerCase().includes(s) && !(c.comment||'').toLowerCase().includes(s) && !(c.phoneRaw||'').toLowerCase().includes(s) && !(c.email||'').toLowerCase().includes(s)) return false;
+        if (!c.name.toLowerCase().includes(s) && !(c.comment||'').toLowerCase().includes(s) && !(c.phoneRaw||'').toLowerCase().includes(s) && !(c.email||'').toLowerCase().includes(s) && !((c as any).keyAttributes||'').toLowerCase().includes(s)) return false;
       }
       return true;
     });
@@ -172,23 +198,26 @@ router.get('/customers', async (req,res,next)=>{
     const start = (q.page-1)*q.pageSize;
     const pageItems = filtered.slice(start, start+q.pageSize);
 
-    // Also compute stats for UI: counts per sentiment, rating, excluded
-    const allForStats = customers;
-    const excludedNoOptIn = allForStats.filter(c=>!c.optInWhatsApp).length;
+    // Stats - previous guests (from all, not filtered)
+    const allForStats = await prisma.customer.findMany();
     const excludedBadPhone = allForStats.filter(c=>!c.phoneValid).length;
     const excludedBadDate = allForStats.filter(c=>!c.acquiredAt).length;
 
     res.json({
-      items: pageItems.map(c=> ({
-        ...c,
-        phoneMasked: c.phoneE164 ? c.phoneE164.slice(0,-4).replace(/./g,'•')+c.phoneE164.slice(-4) : '—',
-        // keep raw for debug but mask in UI
-      })),
+      items: pageItems.map(c=> {
+        const key = c.phoneE164 || c.phoneRaw.replace(/\D/g,'') || c.name.toLowerCase().trim();
+        const repeatCount = repeatMap.get(key) || 1;
+        return {
+          ...c,
+          phoneMasked: c.phoneE164 ? c.phoneE164.slice(0,-4).replace(/./g,'•')+c.phoneE164.slice(-4) : '—',
+          repeatCount,
+        };
+      }),
       total,
       page: q.page,
       pageSize: q.pageSize,
       totalPages: Math.ceil(total/q.pageSize),
-      stats: { excludedNoOptIn, excludedBadPhone, excludedBadDate },
+      stats: { excludedBadPhone, excludedBadDate },
       cohortRule,
     });
   } catch(e){ next(e); }
@@ -302,6 +331,13 @@ router.post('/templates', async (req,res,next)=>{
       status: status || 'draft',
     }});
     res.status(201).json(mapTemplate(created));
+  } catch(e){ next(e); }
+});
+
+router.delete('/templates/:id', async (req,res,next)=>{
+  try {
+    await prisma.messageTemplate.delete({ where:{ id: req.params.id }});
+    res.json({ ok:true });
   } catch(e){ next(e); }
 });
 

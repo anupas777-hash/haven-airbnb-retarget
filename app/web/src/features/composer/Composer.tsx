@@ -137,15 +137,15 @@ export function Composer({ campaignId, onNext, exampleGuest }: ComposerProps) {
       <div className="lg:col-span-3 space-y-4">
         <Card className="p-5 space-y-4">
           <div className="flex items-center justify-between">
-            <h3 className="display font-[600] text-ink">Choose a ticket</h3>
-            <Badge className="bg-ink text-paper border-ink mono text-[11px]">{templates?.length || 0} tickets</Badge>
+            <h3 className="display font-[600] text-ink">Choose a message</h3>
+            <Badge className="bg-ink text-paper border-ink mono text-[11px]">{templates?.length || 0} messages</Badge>
           </div>
           <p className="mono text-[11px] leading-4 text-stone">
-            Pick one guest as example - <span className="text-ink font-medium">{example ? `${example.name} · ${example.phoneE164 ? `••••${example.phoneE164.slice(-4)}` : example.phoneRaw}` : 'no guest yet'}</span> - every ticket below shows how it will read for them. Same ticket goes to your whole set, per-guest stamp.
+            Pick one guest as example - <span className="text-ink font-medium">{example ? `${example.name} · ${example.phoneE164 ? `••••${example.phoneE164.slice(-4)}` : example.phoneRaw}` : 'no guest yet'}</span> - every message below shows how it will read for them. Same message goes to your whole set, per-guest stamp.
           </p>
 
           <div className="flex gap-2">
-            <Input placeholder="Filter tickets (VIP, Festive…)" value={filter} onChange={(e) => setFilter(e.target.value)} className="flex-1" />
+            <Input placeholder="Filter messages (VIP, Festive…)" value={filter} onChange={(e) => setFilter(e.target.value)} className="flex-1" />
             <Button variant={showCustom ? 'default' : 'outline'} size="sm" onClick={() => setShowCustom((v) => !v)} className="rounded-full">
               {showCustom ? 'Close' : '+ New'}
             </Button>
@@ -153,7 +153,7 @@ export function Composer({ campaignId, onNext, exampleGuest }: ComposerProps) {
 
           {showCustom && (
             <Card className="p-4 bg-paper border-dashed space-y-3">
-              <h4 className="display font-[600] text-sm">New ticket</h4>
+              <h4 className="display font-[600] text-sm">New message</h4>
               <Input placeholder="Name - e.g. Haven · VIP 20%" value={customName} onChange={(e) => setCustomName(e.target.value)} />
               <textarea value={customBody} onChange={(e) => setCustomBody(e.target.value)} rows={3} className="w-full rounded-xl border border-fog p-3 text-sm" placeholder="Hi {{name}} - … {{discount}} … {{brand}}" />
               <p className="mono text-[11px] text-stone">Use {'{{name}}'} {'{{discount}}'} {'{{brand}}'} → {'{{1}}'} {'{{2}}'} {'{{3}}'}</p>
@@ -168,14 +168,29 @@ export function Composer({ campaignId, onNext, exampleGuest }: ComposerProps) {
               const isActive = templateId === t.id;
               const rendered = example ? localRender(t.body, example, discount) : t.body;
               return (
-                <button
+                <div
                   key={t.id}
                   onClick={() => setTemplateId(t.id)}
-                  className={`text-left rounded-2xl border p-3 transition ${isActive ? 'border-ink bg-ink text-paper shadow' : 'border-fog bg-white hover:bg-paper'}`}
+                  className={`text-left rounded-2xl border p-3 transition cursor-pointer ${isActive ? 'border-ink bg-ink text-paper shadow' : 'border-fog bg-white hover:bg-paper'}`}
                 >
                   <div className="flex items-start justify-between gap-2">
-                    <div className={`display font-[600] text-sm leading-tight ${isActive ? 'text-paper' : 'text-ink'}`}>{t.name}</div>
-                    {isActive && <span className="mono text-[10px] bg-brass text-ink px-2 py-0.5 rounded-full">selected</span>}
+                    <div className={`display font-[600] text-sm leading-tight flex-1 ${isActive ? 'text-paper' : 'text-ink'}`}>{t.name}</div>
+                    <div className="flex items-center gap-1.5 shrink-0">
+                      {isActive && <span className="mono text-[10px] bg-brass text-ink px-2 py-0.5 rounded-full">selected</span>}
+                      <button
+                        onClick={async (e) => {
+                          e.stopPropagation();
+                          if (!confirm(`Delete "${t.name}"?`)) return;
+                          await api.deleteTemplate(t.id);
+                          qc.invalidateQueries({ queryKey: ['templates'] });
+                          if (templateId === t.id) setTemplateId('');
+                        }}
+                        className={`w-7 h-7 rounded-full grid place-items-center border text-xs ${isActive ? 'border-white/20 text-white hover:bg-white/10' : 'border-fog text-stone hover:bg-surface'}`}
+                        title="Delete"
+                      >
+                        ×
+                      </button>
+                    </div>
                   </div>
                   <div className={`mt-1 mono text-[11px] whitespace-pre-wrap ${isActive ? 'text-paper/70' : 'text-stone'}`}>{t.body.slice(0, 88)}{t.body.length > 88 ? '…' : ''}</div>
                   {/* per-template preview for example guest */}
@@ -183,20 +198,16 @@ export function Composer({ campaignId, onNext, exampleGuest }: ComposerProps) {
                     <div className="mono text-[10px] tracking-[0.08em] uppercase text-stone">Preview as {exampleName} · {discount}%</div>
                     <div className="text-sm leading-5 mt-1 whitespace-pre-wrap">{rendered}</div>
                   </div>
-                  <div className={`mt-2 mono text-[11px] flex items-center gap-2 ${isActive ? 'text-paper/60' : 'text-stone'}`}>
-                    <span className={`px-1.5 py-0.5 rounded border text-[10px] ${isActive ? 'border-white/20 bg-white/10' : 'bg-paper border-fog'}`}>{t.whatsappTemplateName || 'custom'}</span>
-                    <span>{t.locale}</span>
-                  </div>
-                </button>
+                </div>
               );
             })}
-            {!filteredTemplates.length && <div className="mono text-sm text-stone text-center py-6">No tickets match “{filter}”</div>}
+            {!filteredTemplates.length && <div className="mono text-sm text-stone text-center py-6">No messages match “{filter}”</div>}
           </div>
 
           <div className="space-y-2 pt-2 border-t border-fog">
-            <Label>Or edit selected ticket body</Label>
+            <Label>Or edit selected message</Label>
             <textarea value={body} onChange={(e) => setBody(e.target.value)} rows={4} className="w-full rounded-xl border border-fog p-3 text-sm" placeholder="Hi {{name}} - we miss you! Here's {{discount}} off…" />
-            <p className="mono text-[11px] text-stone">Edit creates a new ticket on save.</p>
+            <p className="mono text-[11px] text-stone">Edit creates a new message on save.</p>
           </div>
 
           <div className="grid grid-cols-2 gap-3">
@@ -214,23 +225,23 @@ export function Composer({ campaignId, onNext, exampleGuest }: ComposerProps) {
 
           {validation && <div className="text-sm text-signal bg-signal/10 border border-signal/20 rounded-xl p-2.5">{validation}</div>}
           <Button onClick={handleSaveAndNext} disabled={saving} className="w-full rounded-full">
-            {saving ? 'Saving…' : 'Save ticket → Review'}
+            {saving ? 'Saving…' : 'Save message → Review'}
           </Button>
         </Card>
       </div>
 
       <div className="lg:col-span-2 space-y-4">
         <Card className="p-5">
-          <h3 className="display font-[600] mb-3">Live ticket - {exampleName}</h3>
+          <h3 className="display font-[600] mb-3">Live message - {exampleName}</h3>
           <PreviewBubble body={example ? localRender(body, example, discount) : 'Pick a guest in Define to preview…'} />
           <div className="mt-4 mono text-[11px] leading-4 text-stone space-y-1">
-            <div>Same ticket posts to your whole set ({example ? 'e.g. ' + example.name : '-'}), each stamped with their own name/discount.</div>
+            <div>Same message posts to your whole set ({example ? 'e.g. ' + example.name : '-'}), each stamped with their own name/discount.</div>
             <div>Discount <span className="bg-paper border border-fog px-1 rounded mono text-xs">{discount}%</span> is a variable, not hard-coded.</div>
           </div>
         </Card>
         <Card className="p-4 bg-brass/10 border-brass/20">
           <p className="mono text-xs text-ink">
-            <strong>Meta rule:</strong> Outside 24h you must post an approved ticket. Free text only in-session.
+            <strong>Meta rule:</strong> Outside 24h you must post an approved message. Free text only in-session.
           </p>
         </Card>
       </div>

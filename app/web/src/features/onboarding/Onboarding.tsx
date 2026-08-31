@@ -35,7 +35,7 @@ export function Onboarding({ onDone }: { onDone: (sourceId: string, needsMapping
         <div className="ticket-staple" />
         <div className="mono text-[11px] tracking-[0.14em] uppercase text-stone">01 · Lend the ledger</div>
         <h2 className="display text-[28px] font-[700] tracking-[-0.02em] leading-none mt-2">Paste the guest sheet.</h2>
-        <p className="text-sm leading-5 text-stone mt-2">We read the hand - names, phones, first stays, stars, reviews - score the tone, and lay the lapsed at the top. No config.</p>
+        <p className="text-sm leading-5 text-stone mt-2">We read the hand - names, phones, first stays, stars, reviews - score the tone, and lay the previous guests at the top. No config.</p>
 
         <div className="mt-6 space-y-3">
           <div className="space-y-2">

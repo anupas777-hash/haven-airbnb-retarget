@@ -19,6 +19,8 @@
     "dotenv": "^16.6.0",
     "express": "^4.21.2",
     "googleapis": "^144.0.0",
+    "libphonenumber-js": "^1.13.12",
+    "luxon": "^3.7.2",
     "p-queue": "^8.1.0",
     "shared": "*",
     "zod": "^3.23.8"
@@ -26,6 +28,7 @@
   "devDependencies": {
     "@types/cors": "^2.8.17",
     "@types/express": "^5.0.0",
+    "@types/luxon": "^3.7.5",
     "@types/node": "^22.10.2",
     "@types/supertest": "^7.2.1",
     "prisma": "^5.22.0",

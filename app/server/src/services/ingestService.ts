@@ -22,16 +22,19 @@ type SyncSummary = {
 function normalizeForKey(s: string): string {
   return s.toLowerCase().replace(/\s+/g,'').replace(/[^a-z0-9]/g,'');
 }
-function stableRowKey(sheetId: string, rowIndex: number, phoneRaw: string, name: string, emailRaw: string, phoneE164: string | null): string {
-  // Prefer normalized E.164 or digits + normalized name/email for stability across formatting edits
+function stableRowKey(sheetId: string, rowIndex: number, phoneRaw: string, name: string, emailRaw: string, phoneE164: string | null, acquiredAtRaw: string | null): string {
+  // Keep each stay separate: same guest with multiple stays should be separate rows
+  // Use phone+date+rowIndex for stability, fallback to old phone+name for migration
   const phoneKey = phoneE164 ? phoneE164.replace('+','') : String(phoneRaw).replace(/\D/g,'');
   const nameKey = normalizeForKey(name);
   const emailKey = normalizeForKey(emailRaw);
-  // Build deterministic key: if phone valid, use phoneKey + nameKey; else email+name; fallback to index
-  const base = `${sheetId}:${phoneKey || emailKey}:${nameKey}`.toLowerCase().replace(/\s+/g,'');
-  if ((phoneKey || emailKey) && nameKey.length >= 2) return base;
-  if (phoneKey && phoneKey.length >= 7) return `${sheetId}:${phoneKey}`;
-  if (emailKey && emailKey.length >= 5) return `${sheetId}:${emailKey}`;
+  const dateKey = normalizeForKey(String(acquiredAtRaw || ''));
+  if (phoneKey && phoneKey.length >= 7 && dateKey) return `${sheetId}:${phoneKey}:${dateKey}:${rowIndex}`;
+  if (phoneKey && phoneKey.length >= 7) return `${sheetId}:${phoneKey}:${rowIndex}`;
+  if (emailKey && emailKey.length >= 5 && dateKey) return `${sheetId}:${emailKey}:${dateKey}:${rowIndex}`;
+  if ((phoneKey || emailKey) && nameKey.length >= 2) return `${sheetId}:${phoneKey || emailKey}:${nameKey}:${rowIndex}`;
+  if (phoneKey && phoneKey.length >= 7) return `${sheetId}:${phoneKey}:${rowIndex}`;
+  if (emailKey && emailKey.length >= 5) return `${sheetId}:${emailKey}:${rowIndex}`;
   return `${sheetId}:row:${rowIndex}`;
 }
 
@@ -108,6 +111,7 @@ export async function ingestSheet(url: string, confirmedMapping?: ColumnMapping 
       const commentRaw = mapping.comment ? (row[mapping.comment] ?? '') : '';
       const optInRaw = mapping.opt_in_whatsapp ? (row[mapping.opt_in_whatsapp] ?? '') : '';
       const emailRaw = mapping.email ? (row[mapping.email] ?? '') : '';
+      const keyAttributesRaw = (mapping as any).key_attributes ? (row[(mapping as any).key_attributes] ?? '') : '';
 
       const name = String(nameRaw).trim();
       if (!name) { skipped++; skippedReasons.push({row:rowNum, reason:'Missing name'}); continue; }
@@ -130,11 +134,12 @@ export async function ingestSheet(url: string, confirmedMapping?: ColumnMapping 
       const comment = String(commentRaw).trim() || null;
       const optIn = mapping.opt_in_whatsapp ? coerceOptIn(optInRaw) : false;
       const email = String(emailRaw).trim() || null;
+      const keyAttributes = String(keyAttributesRaw).trim() || null;
 
       // Sentiment
       const sentiment = sentimentService.analyze(comment);
 
-      const rowKey = stableRowKey(source.id, i, String(phoneRaw), name, String(emailRaw), phoneRes.e164);
+      const rowKey = stableRowKey(source.id, i, String(phoneRaw), name, String(emailRaw), phoneRes.e164, String(acquiredRaw || ''));
 
       // Try to find existing by rowKey first, then fallback to phoneE164/email/name within same source for robustness across formatting changes
       let existing = await prisma.customer.findUnique({ where:{ sheetRowKey: rowKey }});
@@ -181,6 +186,7 @@ export async function ingestSheet(url: string, confirmedMapping?: ColumnMapping 
         sentimentHash: sentiment.hash,
         optInWhatsApp: optIn,
         email,
+        keyAttributes,
         sourceId: source.id,
       };
 

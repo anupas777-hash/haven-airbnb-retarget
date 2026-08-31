@@ -22,6 +22,7 @@ model Customer {
   sentimentHash   String?
   optInWhatsApp   Boolean  @default(false)
   email           String?
+  keyAttributes   String?   // host judgment: Key Attributes of Customer
   sheetRowKey     String   @unique
   sourceId        String?
   source          SheetSource? @relation(fields: [sourceId], references: [id])

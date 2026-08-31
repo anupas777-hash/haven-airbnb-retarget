@@ -11,7 +11,7 @@ export const CampaignStatusSchema = z.enum(['draft', 'queued', 'sending', 'compl
 export type CampaignStatus = z.infer<typeof CampaignStatusSchema>;
 
 // ── Column mapping ──
-export const LogicalFieldSchema = z.enum(['name','phone','acquired_at','rating','comment','opt_in_whatsapp','email']);
+export const LogicalFieldSchema = z.enum(['name','phone','acquired_at','rating','comment','opt_in_whatsapp','email','key_attributes']);
 export type LogicalField = z.infer<typeof LogicalFieldSchema>;
 
 export const ColumnMappingSchema = z.record(LogicalFieldSchema, z.string().nullable());

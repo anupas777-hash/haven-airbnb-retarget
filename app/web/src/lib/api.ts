@@ -47,6 +47,7 @@ export const api = {
   retry: (campaignId:string, customerId:string) => req<any>(`/campaigns/${campaignId}/deliveries/${customerId}/retry`, { method:'POST' }),
   templates: () => req<any[]>('/templates'),
   createTemplate: (body:any) => req<any>('/templates', { method:'POST', body: JSON.stringify(body)}),
+  deleteTemplate: (id:string) => req<any>(`/templates/${id}`, { method:'DELETE' }),
   bulkOptIn: (sourceId:string, value:boolean) => req<any>(`/sources/${sourceId}/bulk-opt-in`, { method:'POST', body: JSON.stringify({ value })}),
   setupStatus: () => req<any>('/setup/status'),
   testSheet: (url:string) => req<any>('/setup/test-sheet', { method:'POST', body: JSON.stringify({ url })}),
