@@ -46,13 +46,9 @@ export function Onboarding({ onDone }: { onDone: (sourceId: string, needsMapping
                 {loading ? 'Reading…' : 'Sync →'}
               </Button>
             </div>
-            <div className="flex gap-2">
-              <Button variant="ghost" size="sm" onClick={() => setUrl('mock://demo')} className="rounded-full text-xs">Use demo data (15 guests)</Button>
-              <Button variant="ghost" size="sm" onClick={() => setUrl('https://docs.google.com/spreadsheets/d/1WzRK4mYfI_e3io3wDZJttPxaecNU9lh-GkO0ILcsoTU/edit')} className="rounded-full text-xs">Use sample sheet</Button>
-            </div>
-            <p className="mono text-[11px] leading-4 text-stone/70">Make it “Anyone with the link - Viewer”. Private sheets need pantry key - share with the pantry email in Settings. In cloud preview, Google fetch is blocked — use demo or run on localhost.</p>
+            <p className="mono text-[11px] leading-4 text-stone/70">Make it “Anyone with the link - Viewer”. Private sheets need service account key - share with the email in Settings. If Google fetch fails, use CSV upload below.</p>
             <div className="border-t border-fog pt-3">
-              <Label>Or upload CSV (workaround if Google link fails)</Label>
+              <Label>Or upload CSV directly</Label>
               <input
                 type="file"
                 accept=".csv"

@@ -87,7 +87,7 @@ export class PublicCsvSheetsClient implements SheetsClient {
         const msg = e?.message || String(e);
         console.log(`[sheets] Fetch error from ${endpoint}: ${msg}`);
         if (msg.includes('fetch failed') || msg.includes('SSL_ERROR') || msg.includes('network') || msg.includes('ECONNREFUSED')) {
-          lastError = new Error(`Network error — cannot reach Google Sheets (fetch failed). If you're in cloud preview, use mock://demo. On local, check internet. Original: ${msg}`);
+          lastError = new Error(`Network error — cannot reach Google Sheets (fetch failed). Check your internet and sheet sharing (Anyone with link - Viewer). Original: ${msg}`);
         } else {
           lastError = e;
         }

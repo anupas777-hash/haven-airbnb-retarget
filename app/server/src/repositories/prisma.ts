@@ -25,7 +25,7 @@ function ensureTables() {
     const tables = db.prepare(`SELECT name FROM sqlite_master WHERE type='table'`).all() as any[];
     const tableNames = tables.map((t: any) => t.name);
     if (!tableNames.includes('Customer')) {
-      console.log('[prisma-mock] Creating tables from migration...');
+      console.log('[prisma] Creating tables from migration...');
       const migrationPath = path.join(path.dirname(dbPath), 'migrations', '20260825130101_init', 'migration.sql');
       const migration2Path = path.join(path.dirname(dbPath), 'migrations', '20260827112605_add_key_attributes', 'migration.sql');
       let sql = '';
@@ -145,7 +145,7 @@ function ensureTables() {
       } catch {}
     }
   } catch (e) {
-    console.error('[prisma-mock] ensureTables error', e);
+    console.error('[prisma] ensureTables error', e);
   }
 }
 

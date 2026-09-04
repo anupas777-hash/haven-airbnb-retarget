@@ -5,7 +5,6 @@ import { parseDateLenient, coerceOptIn } from '../domain/CohortRule.js';
 import { sentimentService } from './sentimentService.js';
 import { CompositeSheetsClient } from '../integrations/sheets/index.js';
 import type { ColumnMapping } from 'shared';
-import { MockSheetsClient } from '../integrations/sheets/MockSheetsClient.js';
 
 type SyncSummary = {
   added: number;
@@ -44,9 +43,6 @@ export async function ingestSheet(url: string, confirmedMapping?: ColumnMapping 
   try {
     data = await client.fetchSheet(url);
   } catch (e:any) {
-    // If public fetch failed, but url is not mock, we still want to surface needs service account.
-    // For demo resilience: if error indicates not publicly readable, fallback to mock fixture but flag?
-    // Instead, rethrow with helpful code
     throw { code: 'SHEET_NOT_READABLE', message: e.message || 'Could not read sheet', details: { url } };
   }
 

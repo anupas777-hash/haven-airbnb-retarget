@@ -19,14 +19,21 @@ describe('API', () => {
     expect(res.body.ok).toBe(true);
   });
 
-  it('ingest mock sheet', async ()=>{
-    const res = await request(app).post('/api/sources').send({ url:'mock://demo' });
+  it('ingest csv sheet', async ()=>{
+    const csv = `Customer Name,Phone,Acquired Date,Rating,Comment,Opt In WhatsApp,Email
+Ava Thompson,(415) 555-0101,2024-01-15,5,Absolutely loved it!,yes,ava@example.com
+Liam Chen,415-555-0102,2024-01-16,4,Great service,yes,liam@example.com`;
+    const res = await request(app).post('/api/sources/csv').send({ csvText: csv, title: 'Test CSV' });
     expect(res.status).toBe(200);
     expect(res.body.added + res.body.updated).toBeGreaterThanOrEqual(0);
   });
 
   it('customers filtering composes AND', async ()=>{
-    await request(app).post('/api/sources').send({ url:'mock://demo' });
+    const csv = `Customer Name,Phone,Acquired Date,Rating,Comment,Opt In WhatsApp,Email
+Ava Thompson,(415) 555-0101,2024-01-15,5,Absolutely loved it!,yes,ava@example.com
+Liam Chen,415-555-0102,2024-01-16,4,Great service,yes,liam@example.com
+Sophia Patel,+1 415 555 0103,2024-01-17,2,Wait was too long,yes,sophia@example.com`;
+    await request(app).post('/api/sources/csv').send({ csvText: csv, title: 'Test CSV Filter' });
     const res = await request(app).get('/api/customers?sentiment=positive&minRating=4&optedInOnly=true');
     expect(res.status).toBe(200);
     expect(res.body.items.every((c:any)=> c.sentimentLabel==='positive' && c.rating>=4 && c.optInWhatsApp)).toBe(true);
