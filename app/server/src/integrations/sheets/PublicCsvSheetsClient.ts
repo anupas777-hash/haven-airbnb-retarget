@@ -31,25 +31,44 @@ export class PublicCsvSheetsClient implements SheetsClient {
   async fetchSheet(url: string): Promise<SheetData> {
     const sheetId = extractSheetId(url);
     if (!sheetId) throw new Error('Invalid Google Sheet URL — could not extract sheet ID');
-    // Try multiple endpoints
+    // Try multiple endpoints - Google has several CSV export paths
+    const gidMatch = url.match(/[#&]gid=(\d+)/);
+    const gid = gidMatch ? gidMatch[1] : undefined;
     const candidates = [
-      toCsvExportUrl(sheetId),
+      toCsvExportUrl(sheetId, gid),
       toGvizUrl(sheetId),
-      // also try with gid extraction if present
-      ...(() => {
-        const gidMatch = url.match(/[#&]gid=(\d+)/);
-        return gidMatch ? [toCsvExportUrl(sheetId, gidMatch[1])] : [];
-      })()
+      `https://docs.google.com/spreadsheets/d/${sheetId}/export?format=csv&id=${sheetId}${gid ? `&gid=${gid}` : ''}`,
+      `https://docs.google.com/spreadsheets/d/${sheetId}/gviz/tq?tqx=out:csv&sheet=Sheet1`,
+      `https://docs.google.com/spreadsheets/d/${sheetId}/gviz/tq?tqx=out:csv`,
+      `https://docs.google.com/spreadsheets/d/e/2PACX-${sheetId}/pub?output=csv`,
     ];
     let lastError: any = null;
     for (const endpoint of candidates) {
       try {
-        const res = await fetch(endpoint, { redirect: 'follow' });
-        if (!res.ok) { lastError = new Error(`HTTP ${res.status} from ${endpoint}`); continue; }
+        console.log(`[sheets] Trying ${endpoint}`);
+        const res = await fetch(endpoint, {
+          redirect: 'follow',
+          headers: {
+            'User-Agent': 'Mozilla/5.0 (Haven Airbnb Retarget)',
+            'Accept': 'text/csv, text/plain, */*',
+          },
+        });
+        if (!res.ok) {
+          const txt = await res.text().catch(() => '');
+          console.log(`[sheets] HTTP ${res.status} from ${endpoint}: ${txt.slice(0,200)}`);
+          lastError = new Error(`HTTP ${res.status} from ${endpoint} — ${txt.slice(0,200)}`);
+          continue;
+        }
         const text = await res.text();
         // Heuristic: if returned HTML, not CSV
-        if (text.trim().startsWith('<!DOCTYPE') || text.trim().startsWith('<html')) {
-          lastError = new Error('Sheet is not publicly readable — returned HTML (needs sharing or service account)');
+        if (text.trim().startsWith('<!DOCTYPE') || text.trim().toLowerCase().startsWith('<html')) {
+          console.log(`[sheets] Got HTML from ${endpoint}, length ${text.length}`);
+          lastError = new Error(`Sheet is not publicly readable — returned HTML (needs sharing as Anyone with link - Viewer). Got: ${text.slice(0,200)}`);
+          continue;
+        }
+        // Check if it's actually an error page from Google
+        if (text.includes('Google Sheets') && text.includes('Sign in')) {
+          lastError = new Error('Google returned sign-in page — sheet is private, share as Anyone with link - Viewer');
           continue;
         }
         const rawRows = parseCsv(text);
@@ -61,12 +80,14 @@ export class PublicCsvSheetsClient implements SheetsClient {
           return obj;
         });
         // Title fallback to sheetId
+        console.log(`[sheets] Success from ${endpoint}: ${rows.length} rows`);
         return { title: `Sheet ${sheetId.slice(0,8)}`, headers, rows, rawRows };
       } catch (e: any) {
         // Preserve original fetch error details
         const msg = e?.message || String(e);
-        if (msg.includes('fetch failed') || msg.includes('SSL_ERROR') || msg.includes('network')) {
-          lastError = new Error(`Network blocked — cannot reach Google Sheets from this sandbox (fetch failed). Try on your local localhost, or use mock://demo for demo data. Original: ${msg}`);
+        console.log(`[sheets] Fetch error from ${endpoint}: ${msg}`);
+        if (msg.includes('fetch failed') || msg.includes('SSL_ERROR') || msg.includes('network') || msg.includes('ECONNREFUSED')) {
+          lastError = new Error(`Network error — cannot reach Google Sheets (fetch failed). If you're in cloud preview, use mock://demo. On local, check internet. Original: ${msg}`);
         } else {
           lastError = e;
         }

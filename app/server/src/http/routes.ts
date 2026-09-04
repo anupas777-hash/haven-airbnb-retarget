@@ -57,6 +57,106 @@ router.post('/sources', async (req,res,next)=>{
   } catch(e){ next(e); }
 });
 
+// CSV upload workaround - user can download sheet as CSV and upload
+router.post('/sources/csv', async (req,res,next)=>{
+  try {
+    const { csvText, title, url } = req.body;
+    if (!csvText || typeof csvText !== 'string') return res.status(400).json({ error:{ code:'BAD_REQUEST', message:'csvText required'}});
+    // Simple CSV parse (same as PublicCsvSheetsClient)
+    function parseCsv(text: string): string[][] {
+      const rows: string[][] = [];
+      let cur = ''; let row: string[] = []; let inQuotes = false;
+      for (let i=0;i<text.length;i++) {
+        const c = text[i];
+        if (c === '"') { if (inQuotes && text[i+1]==='"') { cur+='"'; i++; } else inQuotes=!inQuotes; }
+        else if (c===',' && !inQuotes) { row.push(cur); cur=''; }
+        else if ((c==='\n' || c==='\r') && !inQuotes) { if (c==='\r' && text[i+1]==='\n') i++; row.push(cur); cur=''; if (row.some(v=>v.trim()!=='')) rows.push(row); row=[]; }
+        else { cur+=c; }
+      }
+      if (cur!=='' || row.length>0) { row.push(cur); rows.push(row); }
+      return rows.filter(r=>r.some(v=>v.trim()!==''));
+    }
+    const rawRows = parseCsv(csvText);
+    if (rawRows.length < 1) return res.status(400).json({ error:{ code:'BAD_REQUEST', message:'Empty CSV'}});
+    const headers = rawRows[0].map(h=>h.trim());
+    const rows: Record<string,string>[] = rawRows.slice(1).map(r=>{
+      const obj: Record<string,string> = {};
+      headers.forEach((h,i)=> obj[h]= (r[i] ?? '').trim());
+      return obj;
+    });
+    // Create a synthetic SheetData and ingest via same logic as ingestSheet but using direct data
+    // We reuse ingestSheet by creating a temporary mock client override - simplest: create a SheetSource with csv data via direct service
+    // For now, we create a source and manually run ingest logic using the rows
+    const { detectColumnMapping, needsConfirmation } = await import('../domain/ColumnMapping.js');
+    const { normalizePhone } = await import('../domain/E164Phone.js');
+    const { parseDateLenient, coerceOptIn } = await import('../domain/CohortRule.js');
+    const { sentimentService } = await import('../services/sentimentService.js');
+
+    const sourceUrl = url ? normalizeSheetUrl(url) : `csv-upload://${Date.now()}`;
+    let source = await prisma.sheetSource.findUnique({ where: { url: sourceUrl } });
+    if (!source) {
+      source = await prisma.sheetSource.create({ data: { url: sourceUrl, title: title || `CSV Upload ${new Date().toISOString().slice(0,10)}`, sheetId: sourceUrl }});
+    }
+
+    const { mapping: detected, confidence } = detectColumnMapping(headers);
+    // Persist mapping
+    await prisma.sheetSource.update({ where:{ id: source.id }, data:{ confirmedMapping: JSON.stringify(detected), detectedMapping: JSON.stringify(detected) }});
+
+    let added=0, updated=0, skipped=0;
+    const skippedReasons: any[] = [];
+    for (let i=0;i<rows.length;i++) {
+      const row = rows[i];
+      const rowNum = i+2;
+      try {
+        const nameRaw = detected.name ? (row[detected.name] ?? '') : '';
+        const phoneRaw = detected.phone ? (row[detected.phone] ?? '') : '';
+        const acquiredRaw = detected.acquired_at ? (row[detected.acquired_at] ?? '') : '';
+        const ratingRaw = detected.rating ? (row[detected.rating] ?? '') : '';
+        const commentRaw = detected.comment ? (row[detected.comment] ?? '') : '';
+        const optInRaw = detected.opt_in_whatsapp ? (row[detected.opt_in_whatsapp] ?? '') : '';
+        const emailRaw = detected.email ? (row[detected.email] ?? '') : '';
+        const keyAttributesRaw = (detected as any).key_attributes ? (row[(detected as any).key_attributes] ?? '') : '';
+
+        const name = String(nameRaw).trim();
+        if (!name) { skipped++; skippedReasons.push({row:rowNum, reason:'Missing name'}); continue; }
+
+        const phoneRes = normalizePhone(String(phoneRaw));
+        const acquiredAt = parseDateLenient(String(acquiredRaw));
+        let rating: number | null = null;
+        if (ratingRaw !== '' && ratingRaw != null) {
+          const n = parseInt(String(ratingRaw),10);
+          if (!isNaN(n) && n>=1 && n<=5) rating=n;
+        }
+        const comment = String(commentRaw).trim() || null;
+        const optIn = detected.opt_in_whatsapp ? coerceOptIn(optInRaw) : false;
+        const email = String(emailRaw).trim() || null;
+        const keyAttributes = String(keyAttributesRaw).trim() || null;
+        const sentiment = sentimentService.analyze(comment);
+        const sheetRowKey = `${source.id}:${(phoneRes.e164||String(phoneRaw).replace(/\D/g,''))}:${String(acquiredRaw)}:${i}`;
+
+        let existing = await prisma.customer.findUnique({ where:{ sheetRowKey }});
+        const dataToSave = {
+          name, phoneRaw: String(phoneRaw), phoneE164: phoneRes.e164, phoneValid: phoneRes.valid,
+          acquiredAt, acquiredAtRaw: String(acquiredRaw) || null, rating, comment,
+          sentimentLabel: sentiment.label, sentimentScore: sentiment.score, sentimentHash: sentiment.hash,
+          optInWhatsApp: optIn, email, keyAttributes, sourceId: source.id,
+        };
+        if (existing) {
+          await prisma.customer.update({ where:{ id: existing.id }, data: dataToSave });
+          updated++;
+        } else {
+          await prisma.customer.create({ data: { ...dataToSave, sheetRowKey }});
+          added++;
+        }
+      } catch (e:any) {
+        skipped++; skippedReasons.push({row:rowNum, reason: e.message});
+      }
+    }
+    await prisma.sheetSource.update({ where:{ id: source.id }, data:{ lastSyncedAt: new Date() }});
+    res.json({ added, updated, skipped, skippedReasons: skippedReasons.slice(0,20), detectedMapping: detected, confidence, needsConfirmation:false, sourceId: source.id, title: source.title });
+  } catch(e){ next(e); }
+});
+
 router.get('/sources', async (_req,res,next)=>{
   try {
     const sources = await prisma.sheetSource.findMany({ orderBy:{ updatedAt:'desc' }});

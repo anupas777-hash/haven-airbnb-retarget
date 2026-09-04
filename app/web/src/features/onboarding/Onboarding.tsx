@@ -51,6 +51,32 @@ export function Onboarding({ onDone }: { onDone: (sourceId: string, needsMapping
               <Button variant="ghost" size="sm" onClick={() => setUrl('https://docs.google.com/spreadsheets/d/1WzRK4mYfI_e3io3wDZJttPxaecNU9lh-GkO0ILcsoTU/edit')} className="rounded-full text-xs">Use sample sheet</Button>
             </div>
             <p className="mono text-[11px] leading-4 text-stone/70">Make it “Anyone with the link - Viewer”. Private sheets need pantry key - share with the pantry email in Settings. In cloud preview, Google fetch is blocked — use demo or run on localhost.</p>
+            <div className="border-t border-fog pt-3">
+              <Label>Or upload CSV (workaround if Google link fails)</Label>
+              <input
+                type="file"
+                accept=".csv"
+                className="mt-2 block w-full text-sm text-stone file:mr-3 file:py-1.5 file:px-3 file:rounded-full file:border file:border-fog file:bg-white file:text-xs"
+                onChange={async (e) => {
+                  const file = e.target.files?.[0];
+                  if (!file) return;
+                  setLoading(true);
+                  setError(null);
+                  try {
+                    const text = await file.text();
+                    const res = await api.ingestCsv(text, file.name, url);
+                    setResult(res);
+                    qc.invalidateQueries();
+                    setTimeout(() => onDone(res.sourceId, false), 520);
+                  } catch (err: any) {
+                    setError(err.message);
+                  } finally {
+                    setLoading(false);
+                  }
+                }}
+              />
+              <p className="mono text-[10px] text-stone/60 mt-1">Download your sheet as File → Download → CSV, then upload here. Works even if Google fetch fails.</p>
+            </div>
           </div>
 
           <div className="flex items-center gap-2 py-2">

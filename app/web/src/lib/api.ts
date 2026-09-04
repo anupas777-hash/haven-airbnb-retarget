@@ -18,6 +18,7 @@ async function req<T>(path: string, opts?: RequestInit): Promise<T> {
 
 export const api = {
   ingest: (url:string, mapping?: any) => req<any>('/sources', { method:'POST', body: JSON.stringify({ url, mapping })}),
+  ingestCsv: (csvText:string, title?:string, url?:string) => req<any>('/sources/csv', { method:'POST', body: JSON.stringify({ csvText, title, url })}),
   getSources: () => req<any[]>('/sources'),
   getMapping: (id:string) => req<any>(`/sources/${id}/mapping`),
   confirmMapping: (id:string, mapping:any) => req<any>(`/sources/${id}/mapping`, { method:'PUT', body: JSON.stringify({ mapping })}),
