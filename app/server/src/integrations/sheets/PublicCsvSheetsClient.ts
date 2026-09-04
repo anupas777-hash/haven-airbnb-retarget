@@ -1,4 +1,6 @@
 import { SheetsClient, SheetData, extractSheetId, toCsvExportUrl, toGvizUrl } from './SheetsClient.js';
+import https from 'node:https';
+import http from 'node:http';
 
 function parseCsv(text: string): string[][] {
   const rows: string[][] = [];
@@ -27,6 +29,26 @@ function parseCsv(text: string): string[][] {
   return rows.filter(r=>r.some(v=>v.trim()!==''));
 }
 
+function fetchViaHttps(url: string, timeoutMs = 15000): Promise<{ ok: boolean; status: number; text: string }> {
+  return new Promise((resolve, reject) => {
+    const lib = url.startsWith('https') ? https : http;
+    const req = lib.get(url, {
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'Accept': 'text/csv, text/plain, */*',
+      },
+    }, (res) => {
+      let data = '';
+      res.on('data', chunk => data += chunk);
+      res.on('end', () => resolve({ ok: (res.statusCode||0) >=200 && (res.statusCode||0) <300, status: res.statusCode||0, text: data }));
+    });
+    req.on('error', reject);
+    req.setTimeout(timeoutMs, () => {
+      req.destroy(new Error(`Timeout after ${timeoutMs}ms fetching ${url}`));
+    });
+  });
+}
+
 export class PublicCsvSheetsClient implements SheetsClient {
   async fetchSheet(url: string): Promise<SheetData> {
     const sheetId = extractSheetId(url);
@@ -40,60 +62,80 @@ export class PublicCsvSheetsClient implements SheetsClient {
       `https://docs.google.com/spreadsheets/d/${sheetId}/export?format=csv&id=${sheetId}${gid ? `&gid=${gid}` : ''}`,
       `https://docs.google.com/spreadsheets/d/${sheetId}/gviz/tq?tqx=out:csv&sheet=Sheet1`,
       `https://docs.google.com/spreadsheets/d/${sheetId}/gviz/tq?tqx=out:csv`,
-      `https://docs.google.com/spreadsheets/d/e/2PACX-${sheetId}/pub?output=csv`,
     ];
     let lastError: any = null;
     for (const endpoint of candidates) {
       try {
         console.log(`[sheets] Trying ${endpoint}`);
-        const res = await fetch(endpoint, {
-          redirect: 'follow',
-          headers: {
-            'User-Agent': 'Mozilla/5.0 (Haven Airbnb Retarget)',
-            'Accept': 'text/csv, text/plain, */*',
-          },
-        });
-        if (!res.ok) {
-          const txt = await res.text().catch(() => '');
-          console.log(`[sheets] HTTP ${res.status} from ${endpoint}: ${txt.slice(0,200)}`);
-          lastError = new Error(`HTTP ${res.status} from ${endpoint} — ${txt.slice(0,200)}`);
+        // Try native fetch first, fallback to https module
+        let resOk = false;
+        let status = 0;
+        let text = '';
+        try {
+          const controller = new AbortController();
+          const timeout = setTimeout(() => controller.abort(), 12000);
+          const res = await fetch(endpoint, {
+            redirect: 'follow',
+            signal: controller.signal,
+            headers: {
+              'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+              'Accept': 'text/csv, text/plain, */*',
+            },
+          });
+          clearTimeout(timeout);
+          status = res.status;
+          resOk = res.ok;
+          text = await res.text();
+        } catch (fetchErr: any) {
+          console.log(`[sheets] fetch() failed, trying https module: ${fetchErr.message}`);
+          // Fallback to https module
+          try {
+            const r = await fetchViaHttps(endpoint);
+            status = r.status;
+            resOk = r.ok;
+            text = r.text;
+          } catch (httpsErr: any) {
+            throw new Error(`Both fetch and https failed: fetch=${fetchErr.message}, https=${httpsErr.message}`);
+          }
+        }
+
+        if (!resOk) {
+          console.log(`[sheets] HTTP ${status} from ${endpoint}: ${text.slice(0,300)}`);
+          lastError = new Error(`HTTP ${status} from ${endpoint} — ${text.slice(0,300)}`);
           continue;
         }
-        const text = await res.text();
         // Heuristic: if returned HTML, not CSV
         if (text.trim().startsWith('<!DOCTYPE') || text.trim().toLowerCase().startsWith('<html')) {
-          console.log(`[sheets] Got HTML from ${endpoint}, length ${text.length}`);
-          lastError = new Error(`Sheet is not publicly readable — returned HTML (needs sharing as Anyone with link - Viewer). Got: ${text.slice(0,200)}`);
-          continue;
-        }
-        // Check if it's actually an error page from Google
-        if (text.includes('Google Sheets') && text.includes('Sign in')) {
-          lastError = new Error('Google returned sign-in page — sheet is private, share as Anyone with link - Viewer');
+          console.log(`[sheets] Got HTML from ${endpoint}, length ${text.length}, snippet: ${text.slice(0,500)}`);
+          // Check if it's Google login page
+          if (text.includes('accounts.google.com') || text.includes('Sign in')) {
+            lastError = new Error(`Sheet is private — Google returned sign-in page. Share as Anyone with link - Viewer. Snippet: ${text.slice(0,200)}`);
+          } else {
+            lastError = new Error(`Sheet returned HTML not CSV (might be private or wrong ID). Snippet: ${text.slice(0,200)}`);
+          }
           continue;
         }
         const rawRows = parseCsv(text);
         if (rawRows.length < 1) { lastError = new Error('Empty sheet or no rows'); continue; }
         const headers = rawRows[0].map(h=>h.trim());
+        if (headers.length < 2) {
+          lastError = new Error(`Only ${headers.length} column found, expected at least 2. Got: ${headers.join(',')}. Raw: ${text.slice(0,500)}`);
+          continue;
+        }
         const rows: Record<string,string>[] = rawRows.slice(1).map(r=>{
           const obj: Record<string,string> = {};
           headers.forEach((h,i)=> obj[h]= (r[i] ?? '').trim());
           return obj;
         });
-        // Title fallback to sheetId
-        console.log(`[sheets] Success from ${endpoint}: ${rows.length} rows`);
+        console.log(`[sheets] Success from ${endpoint}: ${rows.length} rows, headers: ${headers.join(', ')}`);
         return { title: `Sheet ${sheetId.slice(0,8)}`, headers, rows, rawRows };
       } catch (e: any) {
-        // Preserve original fetch error details
         const msg = e?.message || String(e);
-        console.log(`[sheets] Fetch error from ${endpoint}: ${msg}`);
-        if (msg.includes('fetch failed') || msg.includes('SSL_ERROR') || msg.includes('network') || msg.includes('ECONNREFUSED')) {
-          lastError = new Error(`Network error — cannot reach Google Sheets (fetch failed). Check your internet and sheet sharing (Anyone with link - Viewer). Original: ${msg}`);
-        } else {
-          lastError = e;
-        }
+        console.log(`[sheets] Error from ${endpoint}: ${msg}`);
+        lastError = new Error(`Failed ${endpoint}: ${msg}`);
       }
     }
-    throw lastError || new Error('Failed to fetch sheet via public path');
+    throw lastError || new Error('Failed to fetch sheet via public path - all endpoints failed');
   }
 
   async testConnection(url: string): Promise<{ ok: boolean; title?: string; error?: string }> {

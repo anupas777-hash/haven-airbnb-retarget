@@ -48,7 +48,7 @@ export function Onboarding({ onDone }: { onDone: (sourceId: string, needsMapping
             </div>
             <p className="mono text-[11px] leading-4 text-stone/70">Make it “Anyone with the link - Viewer”. Private sheets need service account key - share with the email in Settings. If Google fetch fails, use CSV upload below.</p>
             <div className="border-t border-fog pt-3">
-              <Label>Or upload CSV directly</Label>
+              <Label>Or upload CSV directly (reliable workaround)</Label>
               <input
                 type="file"
                 accept=".csv"
@@ -77,10 +77,21 @@ export function Onboarding({ onDone }: { onDone: (sourceId: string, needsMapping
 
           <div className="flex items-center gap-2 py-2">
             <span className="stamp text-[10px] border-stone text-stone px-1.5 py-0.5">Proof</span>
-            <span className="mono text-[11px] tracking-[0.06em] uppercase text-stone">Messages are stamped, not posted - until you go live</span>
+            <span className="mono text-[11px] tracking-[0.06em] uppercase text-stone\">Messages are stamped, not posted - until you go live</span>
           </div>
 
-          {error && <div className="text-sm text-signal bg-signal/10 border border-signal/20 rounded-xl p-3">{error}</div>}
+          {error && (
+            <div className="text-sm text-signal bg-signal/10 border border-signal/20 rounded-xl p-3 space-y-2">
+              <div className="font-medium">{error}</div>
+              <div className="text-xs text-stone bg-white border border-fog rounded-lg p-2">
+                <div className="font-medium text-ink">Quick fix:</div>
+                <div>1. Open your Google Sheet → File → Download → CSV</div>
+                <div>2. Upload that CSV using the uploader above</div>
+                <div className="mt-1">Also verify: Share → General access → Anyone with link → Viewer, and check your internet.</div>
+                <div className="mt-1">Check terminal logs for [sheets] details.</div>
+              </div>
+            </div>
+          )}
           {result && !result.needsConfirmation && (
             <div className="text-sm bg-moss/10 border border-moss/20 rounded-xl p-3 mono">
               <div className="font-medium text-moss">Laid · {result.added} new · {result.updated} updated · {result.skipped} skipped</div>
@@ -94,7 +105,7 @@ export function Onboarding({ onDone }: { onDone: (sourceId: string, needsMapping
           </details>
         </div>
       </Card>
-      <p className="mono text-[11px] tracking-[0.06em] uppercase text-stone/60 text-center mt-4">No credentials to try · “Sync” re-reads the sheet anytime</p>
+      <p className="mono text-[11px] tracking-[0.06em] uppercase text-stone/60 text-center mt-4\">No credentials to try · “Sync” re-reads the sheet anytime</p>
     </div>
   );
 }
@@ -152,13 +163,13 @@ export function MappingConfirm({ sourceId, onConfirmed }: { sourceId: string; on
       <div className="ticket-perf paper rounded-2xl p-6 md:p-8 pt-10 animate-rise">
         <div className="ticket-staple" />
         <div className="mono text-[11px] tracking-[0.14em] uppercase text-stone">Ledger · Column hand</div>
-        <h2 className="display text-[26px] font-[700] tracking-[-0.02em] leading-none mt-2">Confirm the hand.</h2>
-        <p className="text-sm text-stone mt-2">We couldn’t read the required columns with confidence. Tap the right header for each - we remember this ledger.</p>
+        <h2 className="display text-[26px] font-[700] tracking-[-0.02em] leading-none mt-2\">Confirm the hand.</h2>
+        <p className="text-sm text-stone mt-2\">We couldn’t read the required columns with confidence. Tap the right header for each - we remember this ledger.</p>
 
         <div className="mt-6 space-y-3">
           {fields.map(([key, label]) => (
             <div key={key} className="flex items-center gap-3">
-              <Label className="w-28 shrink-0">{label}</Label>
+              <Label className="w-28 shrink-0\">{label}</Label>
               <select value={mapping?.[key] || ''} onChange={(e) => setMapping({ ...mapping, [key]: e.target.value || null })} className="flex h-9 w-full rounded-full border border-fog bg-white px-3 text-sm focus:border-brass focus:ring-2 focus:ring-brass/20">
                 <option value="">- not mapped -</option>
                 {headers.map((h) => (
@@ -169,11 +180,11 @@ export function MappingConfirm({ sourceId, onConfirmed }: { sourceId: string; on
               </select>
             </div>
           ))}
-          {error && <div className="text-sm text-signal bg-signal/10 border border-signal/20 rounded-xl p-3">{error}</div>}
+          {error && <div className="text-sm text-signal bg-signal/10 border border-signal/20 rounded-xl p-3\">{error}</div>}
           <Button onClick={save} disabled={saving} className="w-full rounded-full">
             {saving ? 'Setting…' : 'Confirm & lay the table →'}
           </Button>
-          <p className="mono text-[11px] text-stone/60 text-center">We persist this map per sheet, never asked again.</p>
+          <p className="mono text-[11px] text-stone/60 text-center\">We persist this map per sheet, never asked again.</p>
         </div>
       </div>
     </div>
