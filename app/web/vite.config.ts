@@ -11,8 +11,20 @@ export default defineConfig({
     }
   },
   server: {
+    host: '0.0.0.0',
+    port: 5173,
+    cors: true,
+    // @ts-ignore - allow all preview hosts for Arena
+    allowedHosts: true,
+    hmr: {
+      clientPort: 443,
+    },
     proxy: {
       '/api': 'http://localhost:3001',
-    }
-  }
+    },
+  },
+  preview: {
+    host: '0.0.0.0',
+    port: 5173,
+  },
 });

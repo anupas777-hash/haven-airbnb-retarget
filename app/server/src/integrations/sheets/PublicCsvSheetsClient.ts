@@ -62,7 +62,15 @@ export class PublicCsvSheetsClient implements SheetsClient {
         });
         // Title fallback to sheetId
         return { title: `Sheet ${sheetId.slice(0,8)}`, headers, rows, rawRows };
-      } catch (e) { lastError = e; }
+      } catch (e: any) {
+        // Preserve original fetch error details
+        const msg = e?.message || String(e);
+        if (msg.includes('fetch failed') || msg.includes('SSL_ERROR') || msg.includes('network')) {
+          lastError = new Error(`Network blocked — cannot reach Google Sheets from this sandbox (fetch failed). Try on your local localhost, or use mock://demo for demo data. Original: ${msg}`);
+        } else {
+          lastError = e;
+        }
+      }
     }
     throw lastError || new Error('Failed to fetch sheet via public path');
   }
