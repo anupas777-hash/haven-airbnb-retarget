@@ -482,7 +482,11 @@ class Table<T> {
     const data = args.data;
     const id = data.id || genId();
     const now = new Date().toISOString();
-    const row: any = { id, createdAt: now, updatedAt: now, ...data };
+    const row: any = { id, createdAt: now, updatedAt: now };
+    // Filter out undefined - SQLite can't bind undefined
+    for (const [k, v] of Object.entries(data)) {
+      if (v !== undefined) row[k] = v;
+    }
     if (this.name === 'Customer') {
       if ('phoneValid' in row) row.phoneValid = row.phoneValid ? 1 : 0;
       if ('optInWhatsApp' in row) row.optInWhatsApp = row.optInWhatsApp ? 1 : 0;
@@ -491,6 +495,10 @@ class Table<T> {
     if (this.name === 'Expense' && 'recurring' in row) row.recurring = row.recurring ? 1 : 0;
     for (const k of ['createdAt', 'updatedAt', 'lastSyncedAt', 'date', 'checkIn', 'checkOut']) {
       if (row[k] instanceof Date) row[k] = row[k].toISOString();
+    }
+    // Ensure no undefined remains
+    for (const k of Object.keys(row)) {
+      if (row[k] === undefined) row[k] = null;
     }
     const cols = Object.keys(row);
     const placeholders = cols.map(() => '?').join(', ');
@@ -529,6 +537,10 @@ class Table<T> {
       if (v && typeof v === 'object' && 'increment' in v) updated[k] = (existing[k] || 0) + v.increment;
     }
     const storage: any = { ...updated };
+    // Remove undefined
+    for (const k of Object.keys(storage)) {
+      if (storage[k] === undefined) delete storage[k];
+    }
     if (this.name === 'Customer') {
       if ('phoneValid' in storage) storage.phoneValid = storage.phoneValid ? 1 : 0;
       if ('optInWhatsApp' in storage) storage.optInWhatsApp = storage.optInWhatsApp ? 1 : 0;
@@ -537,6 +549,9 @@ class Table<T> {
     if (this.name === 'Expense' && 'recurring' in storage) storage.recurring = storage.recurring ? 1 : 0;
     for (const k of ['createdAt', 'updatedAt', 'lastSyncedAt', 'date', 'checkIn', 'checkOut']) {
       if (storage[k] instanceof Date) storage[k] = storage[k].toISOString();
+    }
+    for (const k of Object.keys(storage)) {
+      if (storage[k] === undefined) storage[k] = null;
     }
     const cols = Object.keys(storage).filter(c => c !== 'id');
     const setClause = cols.map(c => `"${c}" = ?`).join(', ');
