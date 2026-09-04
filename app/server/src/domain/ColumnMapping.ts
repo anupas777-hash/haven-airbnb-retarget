@@ -4,9 +4,9 @@ import type { ColumnMapping, LogicalField } from 'shared';
 const SYNONYMS: Record<LogicalField, string[]> = {
   name: ['name','customer','full name','client','customer name','client name','fullname'],
   phone: ['phone','mobile','number','whatsapp','contact','phone number','mobile number','telephone','tel','cell'],
-  acquired_at: ['acquired','signup','joined','first visit','created','date','acquired at','signup date','join date','created at','first_visit','acquired_at','signup_at','customer since','since'],
-  rating: ['rating','stars','score','satisfaction','star rating','rate'],
-  comment: ['comment','feedback','review','notes','message','remarks','opinion','testimonial'],
+  acquired_at: ['acquired','signup','joined','first visit','created','date','acquired at','signup date','join date','created at','first_visit','acquired_at','signup_at','customer since','since','date of 1st booking','first booking','booking date','1st booking','date of booking','checkin','check-in','arrival'],
+  rating: ['rating','stars','score','satisfaction','star rating','rate','rating given','rating given','stars given'],
+  comment: ['comment','feedback','review','notes','message','remarks','opinion','testimonial','rating comment','review comment'],
   opt_in_whatsapp: ['opt in','consent','whatsapp ok','subscribed','opt_in','optin','whatsapp','opt in whatsapp','whatsapp opt in','marketing consent','opt-in'],
   email: ['email','e-mail','mail','email address','e mail'],
   key_attributes: ['key attributes','key attributes of customer','attributes','host notes','judgment','judgement','host judgment','notes','key attribute'],
