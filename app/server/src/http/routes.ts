@@ -518,5 +518,340 @@ router.post('/webhooks/whatsapp', async (req,res,next)=>{
   } catch(e){ next(e); }
 });
 
+// ── Multi-Property OS - Properties ──
+router.get('/properties', async (_req, res, next) => {
+  try {
+    const props = await prisma.property.findMany({ orderBy: { city: 'asc' } });
+    // Add counts
+    const result = await Promise.all(props.map(async (p: any) => {
+      const revCount = await prisma.revenue.count({ where: { propertyId: p.id } });
+      const expCount = await prisma.expense.count({ where: { propertyId: p.id } });
+      const custCount = await prisma.customer.count({ where: { propertyId: p.id } });
+      return { ...p, _count: { revenues: revCount, expenses: expCount, customers: custCount } };
+    }));
+    res.json(result);
+  } catch (e) { next(e); }
+});
+
+router.post('/properties', async (req, res, next) => {
+  try {
+    const { name, city, country, address, airbnbListingId, airbnbUrl, type, bedrooms, beds, status, sheetUrl, color } = req.body;
+    if (!name || !city) return res.status(400).json({ error: { code: 'BAD_REQUEST', message: 'name and city required' } });
+    const slug = name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') + '-' + Date.now().toString(36);
+    const prop = await prisma.property.create({
+      data: {
+        name, city, country: country || 'India', address, airbnbListingId, airbnbUrl, type,
+        bedrooms: bedrooms ? parseInt(bedrooms) : null,
+        beds: beds ? parseInt(beds) : null,
+        status: status || 'active',
+        sheetUrl, slug, color,
+      }
+    });
+    res.status(201).json(prop);
+  } catch (e) { next(e); }
+});
+
+router.get('/properties/:id', async (req, res, next) => {
+  try {
+    const prop = await prisma.property.findUnique({ where: { id: req.params.id } });
+    if (!prop) return res.status(404).json({ error: { code: 'NOT_FOUND', message: 'Property not found' } });
+    const revenues = await prisma.revenue.findMany({ where: { propertyId: prop.id }, orderBy: { date: 'desc' }, take: 20 });
+    const expenses = await prisma.expense.findMany({ where: { propertyId: prop.id }, orderBy: { date: 'desc' }, take: 20 });
+    res.json({ ...prop, recentRevenues: revenues, recentExpenses: expenses });
+  } catch (e) { next(e); }
+});
+
+router.patch('/properties/:id', async (req, res, next) => {
+  try {
+    const prop = await prisma.property.update({ where: { id: req.params.id }, data: req.body });
+    res.json(prop);
+  } catch (e) { next(e); }
+});
+
+router.delete('/properties/:id', async (req, res, next) => {
+  try {
+    await prisma.property.delete({ where: { id: req.params.id } });
+    res.json({ ok: true });
+  } catch (e) { next(e); }
+});
+
+router.get('/cities', async (_req, res, next) => {
+  try {
+    const props = await prisma.property.findMany();
+    const cities = [...new Set(props.map((p: any) => p.city))].filter(Boolean).sort();
+    const result = cities.map(city => {
+      const cityProps = props.filter((p: any) => p.city === city);
+      return { city, propertyCount: cityProps.length, properties: cityProps.map((p: any) => ({ id: p.id, name: p.name, slug: p.slug })) };
+    });
+    res.json(result);
+  } catch (e) { next(e); }
+});
+
+// ── Revenue ──
+router.get('/revenues', async (req, res, next) => {
+  try {
+    const { propertyId, city, from, to, search, page = 1, pageSize = 50, sort = 'date:desc' } = req.query as any;
+    let revenues = await prisma.revenue.findMany({ include: { property: true }, orderBy: { date: 'desc' } });
+    const properties = await prisma.property.findMany();
+
+    // Apply filters
+    if (propertyId) revenues = revenues.filter((r: any) => r.propertyId === propertyId);
+    if (city) {
+      const propMap = new Map(properties.map((p: any) => [p.id, p]));
+      revenues = revenues.filter((r: any) => {
+        const prop = propMap.get(r.propertyId);
+        return prop && prop.city === city;
+      });
+    }
+    if (from) {
+      const fromDate = new Date(from);
+      revenues = revenues.filter((r: any) => new Date(r.date) >= fromDate);
+    }
+    if (to) {
+      const toDate = new Date(to);
+      toDate.setHours(23, 59, 59, 999);
+      revenues = revenues.filter((r: any) => new Date(r.date) <= toDate);
+    }
+    if (search) {
+      const s = String(search).toLowerCase();
+      revenues = revenues.filter((r: any) =>
+        String(r.guestName || '').toLowerCase().includes(s) ||
+        String(r.bookingId || '').toLowerCase().includes(s) ||
+        String(r.room || '').toLowerCase().includes(s) ||
+        String(r.property?.name || '').toLowerCase().includes(s)
+      );
+    }
+
+    // Sorting
+    if (sort) {
+      const [field, dir] = String(sort).split(':');
+      revenues.sort((a: any, b: any) => {
+        const av = a[field]; const bv = b[field];
+        if (av == null && bv == null) return 0;
+        if (av == null) return 1;
+        if (bv == null) return -1;
+        if (av < bv) return dir === 'asc' ? -1 : 1;
+        if (av > bv) return dir === 'asc' ? 1 : -1;
+        return 0;
+      });
+    }
+
+    const total = revenues.length;
+    const p = parseInt(page); const ps = parseInt(pageSize);
+    const start = (p - 1) * ps;
+    const items = revenues.slice(start, start + ps);
+
+    res.json({ items, total, page: p, pageSize: ps, totalPages: Math.ceil(total / ps) });
+  } catch (e) { next(e); }
+});
+
+router.post('/revenues', async (req, res, next) => {
+  try {
+    const { propertyId, date, bookingId, guestName, checkIn, checkOut, nights, room, baseAmount, cleaningFee, taxes, discount, platformFee, payout, netRevenue, notes, channel, status } = req.body;
+    if (!propertyId || !date) return res.status(400).json({ error: { code: 'BAD_REQUEST', message: 'propertyId and date required' } });
+    const prop = await prisma.property.findUnique({ where: { id: propertyId } });
+    if (!prop) return res.status(404).json({ error: { code: 'NOT_FOUND', message: 'Property not found' } });
+
+    const parsedDate = new Date(date);
+    const sheetRowKey = `${propertyId}:manual:rev:${Date.now()}:${Math.random().toString(36).slice(2,8)}`;
+
+    const rev = await prisma.revenue.create({
+      data: {
+        propertyId, date: parsedDate, dateRaw: String(date), bookingId, guestName, checkIn: checkIn ? new Date(checkIn) : null,
+        checkOut: checkOut ? new Date(checkOut) : null, nights: nights ? parseInt(nights) : null, room,
+        baseAmount: baseAmount ? parseFloat(baseAmount) : null, cleaningFee: cleaningFee ? parseFloat(cleaningFee) : null,
+        taxes: taxes ? parseFloat(taxes) : null, discount: discount ? parseFloat(discount) : null,
+        platformFee: platformFee ? parseFloat(platformFee) : null, payout: payout ? parseFloat(payout) : null,
+        netRevenue: netRevenue ? parseFloat(netRevenue) : (payout ? parseFloat(payout) : (baseAmount ? parseFloat(baseAmount) : null)),
+        notes, channel: channel || 'airbnb', status: status || 'confirmed', sheetRowKey, source: 'manual',
+      }
+    });
+    res.status(201).json(rev);
+  } catch (e) { next(e); }
+});
+
+router.patch('/revenues/:id', async (req, res, next) => {
+  try {
+    const rev = await prisma.revenue.update({ where: { id: req.params.id }, data: req.body });
+    res.json(rev);
+  } catch (e) { next(e); }
+});
+
+router.delete('/revenues/:id', async (req, res, next) => {
+  try {
+    await prisma.revenue.delete({ where: { id: req.params.id } });
+    res.json({ ok: true });
+  } catch (e) { next(e); }
+});
+
+// ── Expenses ──
+router.get('/expenses', async (req, res, next) => {
+  try {
+    const { propertyId, city, category, from, to, search, page = 1, pageSize = 50, sort = 'date:desc' } = req.query as any;
+    let expenses = await prisma.expense.findMany({ include: { property: true }, orderBy: { date: 'desc' } });
+    const properties = await prisma.property.findMany();
+
+    if (propertyId) expenses = expenses.filter((e: any) => e.propertyId === propertyId);
+    if (city) {
+      const propMap = new Map(properties.map((p: any) => [p.id, p]));
+      expenses = expenses.filter((e: any) => {
+        const prop = propMap.get(e.propertyId);
+        return prop && prop.city === city;
+      });
+    }
+    if (category) expenses = expenses.filter((e: any) => e.category === category);
+    if (from) {
+      const fromDate = new Date(from);
+      expenses = expenses.filter((e: any) => new Date(e.date) >= fromDate);
+    }
+    if (to) {
+      const toDate = new Date(to);
+      toDate.setHours(23, 59, 59, 999);
+      expenses = expenses.filter((e: any) => new Date(e.date) <= toDate);
+    }
+    if (search) {
+      const s = String(search).toLowerCase();
+      expenses = expenses.filter((e: any) =>
+        String(e.category || '').toLowerCase().includes(s) ||
+        String(e.vendor || '').toLowerCase().includes(s) ||
+        String(e.notes || '').toLowerCase().includes(s)
+      );
+    }
+
+    if (sort) {
+      const [field, dir] = String(sort).split(':');
+      expenses.sort((a: any, b: any) => {
+        const av = a[field]; const bv = b[field];
+        if (av == null && bv == null) return 0;
+        if (av == null) return 1;
+        if (bv == null) return -1;
+        if (av < bv) return dir === 'asc' ? -1 : 1;
+        if (av > bv) return dir === 'asc' ? 1 : -1;
+        return 0;
+      });
+    }
+
+    const total = expenses.length;
+    const p = parseInt(page); const ps = parseInt(pageSize);
+    const start = (p - 1) * ps;
+    const items = expenses.slice(start, start + ps);
+
+    res.json({ items, total, page: p, pageSize: ps, totalPages: Math.ceil(total / ps) });
+  } catch (e) { next(e); }
+});
+
+router.post('/expenses', async (req, res, next) => {
+  try {
+    const { propertyId, date, category, subcategory, vendor, amount, currency, paymentMethod, recurring, notes } = req.body;
+    if (!propertyId || !date || !amount) return res.status(400).json({ error: { code: 'BAD_REQUEST', message: 'propertyId, date, amount required' } });
+    const prop = await prisma.property.findUnique({ where: { id: propertyId } });
+    if (!prop) return res.status(404).json({ error: { code: 'NOT_FOUND', message: 'Property not found' } });
+
+    const sheetRowKey = `${propertyId}:manual:exp:${Date.now()}:${Math.random().toString(36).slice(2,8)}`;
+
+    const exp = await prisma.expense.create({
+      data: {
+        propertyId, date: new Date(date), dateRaw: String(date), category: category || 'Other', subcategory,
+        vendor, amount: parseFloat(amount), currency: currency || 'INR', paymentMethod,
+        recurring: !!recurring, notes, sheetRowKey, source: 'manual',
+      }
+    });
+    res.status(201).json(exp);
+  } catch (e) { next(e); }
+});
+
+router.patch('/expenses/:id', async (req, res, next) => {
+  try {
+    const exp = await prisma.expense.update({ where: { id: req.params.id }, data: req.body });
+    res.json(exp);
+  } catch (e) { next(e); }
+});
+
+router.delete('/expenses/:id', async (req, res, next) => {
+  try {
+    await prisma.expense.delete({ where: { id: req.params.id } });
+    res.json({ ok: true });
+  } catch (e) { next(e); }
+});
+
+router.get('/expenses/categories', async (_req, res, next) => {
+  try {
+    const expenses = await prisma.expense.findMany();
+    const cats = [...new Set(expenses.map((e: any) => e.category).filter(Boolean))].sort();
+    res.json(cats);
+  } catch (e) { next(e); }
+});
+
+// ── Reports / P&L / Dashboard ──
+router.get('/reports/pnl', async (req, res, next) => {
+  try {
+    const { city, propertyId, from, to } = req.query as any;
+    const { getPnLReport } = await import('../services/reportService.js');
+    const filters: any = {};
+    if (city) filters.city = city;
+    if (propertyId) filters.propertyId = propertyId;
+    if (from) filters.from = new Date(from);
+    if (to) { const d = new Date(to); d.setHours(23,59,59,999); filters.to = d; }
+    const report = await getPnLReport(filters);
+    res.json(report);
+  } catch (e) { next(e); }
+});
+
+router.get('/reports/dashboard', async (req, res, next) => {
+  try {
+    const { city, propertyId, from, to } = req.query as any;
+    const { getDashboardMetrics } = await import('../services/reportService.js');
+    const filters: any = {};
+    if (city) filters.city = city;
+    if (propertyId) filters.propertyId = propertyId;
+    if (from) filters.from = new Date(from);
+    if (to) { const d = new Date(to); d.setHours(23,59,59,999); filters.to = d; }
+    const metrics = await getDashboardMetrics(filters);
+    res.json(metrics);
+  } catch (e) { next(e); }
+});
+
+router.get('/reports/property/:id', async (req, res, next) => {
+  try {
+    const { from, to } = req.query as any;
+    const { getPnLReport, getDashboardMetrics } = await import('../services/reportService.js');
+    const filters: any = { propertyId: req.params.id };
+    if (from) filters.from = new Date(from);
+    if (to) { const d = new Date(to); d.setHours(23,59,59,999); filters.to = d; }
+    const pnl = await getPnLReport(filters);
+    const dash = await getDashboardMetrics(filters);
+    const prop = await prisma.property.findUnique({ where: { id: req.params.id } });
+    res.json({ property: prop, pnl, dashboard: dash });
+  } catch (e) { next(e); }
+});
+
+router.get('/reports/city/:city', async (req, res, next) => {
+  try {
+    const { from, to } = req.query as any;
+    const { getPnLReport, getDashboardMetrics } = await import('../services/reportService.js');
+    const filters: any = { city: req.params.city };
+    if (from) filters.from = new Date(from);
+    if (to) { const d = new Date(to); d.setHours(23,59,59,999); filters.to = d; }
+    const pnl = await getPnLReport(filters);
+    const dash = await getDashboardMetrics(filters);
+    res.json({ city: req.params.city, pnl, dashboard: dash });
+  } catch (e) { next(e); }
+});
+
+// ── Local XLSX ingestion from data folder ──
+router.post('/ingest/xlsx', async (req, res, next) => {
+  try {
+    const { filePath, propertyId } = req.body;
+    const { ingestXlsxFile, ingestAllXlsxFromDataFolder } = await import('../services/xlsxService.js');
+    if (filePath) {
+      const result = await ingestXlsxFile(filePath, propertyId);
+      res.json(result);
+    } else {
+      const result = await ingestAllXlsxFromDataFolder();
+      res.json(result);
+    }
+  } catch (e) { next(e); }
+});
+
 // ── Health ──
 router.get('/health', (_req,res)=> res.json({ ok:true, time: new Date().toISOString(), mode: config.isDryRun() ? 'dry-run':'live' }));

@@ -7,6 +7,146 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
+// ── Multi-Property Core ──
+
+model Property {
+  id               String   @id @default(cuid())
+  name             String   // e.g. AJ's Style - 202
+  slug             String   @unique // e.g. goa-ajs-style-202
+  city             String   // e.g. Goa
+  country          String   @default("India")
+  address          String?
+  airbnbListingId  String?
+  airbnbUrl        String?
+  type             String?  // Apartment, Villa, etc.
+  bedrooms         Int?
+  beds             Int?
+  status           String   @default("active") // active|inactive|draft
+  // Sheet mapping - each property can have its own workbook/sheet
+  sheetUrl         String?  // Google Sheet URL for this property
+  sheetId          String?
+  revenueSheetName String?  // Tab name for revenue, default "Revenue"
+  expenseSheetName String?  // Tab name for expenses, default "Expenses"
+  // Metadata
+  color            String?  // UI accent
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  revenues         Revenue[]
+  expenses         Expense[]
+  customers        Customer[]
+  bookings         Booking[]
+
+  @@index([city])
+  @@index([country])
+  @@index([status])
+  @@index([city, status])
+}
+
+model Revenue {
+  id               String   @id @default(cuid())
+  propertyId       String
+  property         Property @relation(fields: [propertyId], references: [id], onDelete: Cascade)
+
+  // Core booking/revenue fields - flexible to match existing sheets
+  date             DateTime // Revenue date / booking date
+  dateRaw          String?  // Original raw date string e.g. "25th Oct 2025"
+  bookingId        String?  // Airbnb booking ID
+  guestName        String?
+  checkIn          DateTime?
+  checkOut         DateTime?
+  nights           Int?
+  room             String?  // Room / listing / property detail
+  // Financial breakdown - preserve existing sheet fields
+  baseAmount       Float?   // Room revenue / base
+  cleaningFee      Float?
+  extraGuestFee    Float?
+  taxes            Float?
+  discount         Float?
+  platformFee      Float?   // Airbnb fee
+  payout           Float?   // Airbnb payout
+  payment          Float?   // Payment Given on 1st Booking
+  netRevenue       Float?   // Calculated net
+  // Guest/booking meta from existing sheet
+  gender           String?
+  duration         String?  // Duration of 1st Booking
+  paymentRaw       String?
+  // Additional
+  channel          String?  @default("airbnb") // airbnb|direct|other
+  status           String?  @default("confirmed") // confirmed|cancelled|pending
+  notes            String?
+  // Source tracking
+  sheetRowKey      String   @unique // stable key to avoid duplicates
+  source           String?  // google-sheets|xlsx-upload|manual
+  sourceUrl        String?
+  rawData          String?  // JSON of original row for audit
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  @@index([propertyId])
+  @@index([date])
+  @@index([propertyId, date])
+  @@index([bookingId])
+}
+
+model Expense {
+  id               String   @id @default(cuid())
+  propertyId       String
+  property         Property @relation(fields: [propertyId], references: [id], onDelete: Cascade)
+
+  date             DateTime
+  dateRaw          String?
+  category         String   // Rent, Utilities, Cleaning, etc.
+  subcategory      String?
+  vendor           String?
+  amount           Float
+  currency         String   @default("INR")
+  paymentMethod    String?
+  recurring        Boolean  @default(false)
+  recurringInterval String? // monthly|weekly|yearly
+  receiptUrl       String?
+  notes            String?
+  // Source tracking
+  sheetRowKey      String   @unique
+  source           String?
+  sourceUrl        String?
+  rawData          String?
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  @@index([propertyId])
+  @@index([date])
+  @@index([propertyId, date])
+  @@index([category])
+  @@index([propertyId, category])
+}
+
+model Booking {
+  id               String   @id @default(cuid())
+  propertyId       String
+  property         Property @relation(fields: [propertyId], references: [id], onDelete: Cascade)
+
+  bookingId        String?  @unique
+  guestName        String
+  guestPhone       String?
+  guestEmail       String?
+  checkIn          DateTime
+  checkOut         DateTime
+  nights           Int
+  guests           Int?
+  status           String   @default("confirmed")
+  totalAmount      Float?
+  source           String?  @default("airbnb")
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  @@index([propertyId])
+  @@index([checkIn])
+  @@index([checkOut])
+}
+
+// ── Existing Guest/Retargeting (now property-aware) ──
+
 model Customer {
   id              String   @id @default(cuid())
   name            String
@@ -17,12 +157,18 @@ model Customer {
   acquiredAtRaw   String?
   rating          Int?
   comment         String?
-  sentimentLabel  String   @default("neutral") // positive|neutral|negative
+  sentimentLabel  String   @default("neutral")
   sentimentScore  Float    @default(0)
   sentimentHash   String?
   optInWhatsApp   Boolean  @default(false)
   email           String?
-  keyAttributes   String?   // host judgment: Key Attributes of Customer
+  keyAttributes   String?
+  gender          String?
+  room            String?
+  // Multi-property link
+  propertyId      String?
+  property        Property? @relation(fields: [propertyId], references: [id], onDelete: SetNull)
+
   sheetRowKey     String   @unique
   sourceId        String?
   source          SheetSource? @relation(fields: [sourceId], references: [id])
@@ -35,6 +181,7 @@ model Customer {
   @@index([rating])
   @@index([sentimentLabel])
   @@index([phoneE164])
+  @@index([propertyId])
 }
 
 model SheetSource {
@@ -44,6 +191,8 @@ model SheetSource {
   title            String   @default("Customer Sheet")
   confirmedMapping String?
   detectedMapping  String?
+  propertyId       String?  // Link to property if this sheet belongs to a property
+  type             String?  @default("customers") // customers|revenue|expenses|bookings
   lastSyncedAt     DateTime?
   createdAt        DateTime @default(now())
   updatedAt        DateTime @updatedAt
@@ -58,11 +207,11 @@ model Campaign {
   discountPercent Int      @default(10)
   templateId      String?
   template        MessageTemplate? @relation(fields: [templateId], references: [id])
-  status          String   @default("draft") // draft|queued|sending|completed|failed
+  status          String   @default("draft")
   filtersSnapshot String?
-  selectionMode   String   @default("none") // none|ids|allMatching
-  selectedIds     String?    // JSON string[]
-  deselectedIds   String?    // JSON for allMatching
+  selectionMode   String   @default("none")
+  selectedIds     String?
+  deselectedIds   String?
   selectionFilters String?
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
@@ -77,7 +226,7 @@ model MessageTemplate {
   whatsappTemplateName  String?
   locale                String   @default("en_US")
   body                  String
-  variables             String     // JSON [{key,mappedTo}]
+  variables             String
   status                String   @default("draft")
   createdAt             DateTime @default(now())
   updatedAt             DateTime @updatedAt
@@ -91,7 +240,7 @@ model Delivery {
   campaign          Campaign @relation(fields: [campaignId], references: [id], onDelete: Cascade)
   customerId        String
   customer          Customer @relation(fields: [customerId], references: [id], onDelete: Cascade)
-  status            String   @default("queued") // queued|sent|delivered|read|failed
+  status            String   @default("queued")
   providerMessageId String?
   error             String?
   attempt           Int      @default(0)

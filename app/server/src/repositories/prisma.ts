@@ -19,20 +19,20 @@ if (!fs.existsSync(dbDir)) fs.mkdirSync(dbDir, { recursive: true });
 
 const db = new DatabaseSync(dbPath);
 
-// Ensure tables exist
+// Ensure tables exist - handles both old and new schema
 function ensureTables() {
   try {
     const tables = db.prepare(`SELECT name FROM sqlite_master WHERE type='table'`).all() as any[];
-    const tableNames = tables.map((t: any) => t.name);
-    if (!tableNames.includes('Customer')) {
-      console.log('[prisma] Creating tables from migration...');
+    const tableNames = new Set(tables.map((t: any) => t.name));
+
+    // Legacy migration path
+    if (!tableNames.has('Customer')) {
+      console.log('[prisma] Creating legacy tables from migration...');
       const migrationPath = path.join(path.dirname(dbPath), 'migrations', '20260825130101_init', 'migration.sql');
-      const migration2Path = path.join(path.dirname(dbPath), 'migrations', '20260827112605_add_key_attributes', 'migration.sql');
       let sql = '';
       if (fs.existsSync(migrationPath)) {
         sql = fs.readFileSync(migrationPath, 'utf8');
       } else {
-        // fallback inline
         sql = `
         CREATE TABLE IF NOT EXISTS "SheetSource" (
             "id" TEXT NOT NULL PRIMARY KEY,
@@ -106,44 +106,163 @@ function ensureTables() {
         );
         `;
       }
-      // Execute statements
       const statements = sql.split(';').map(s => s.trim()).filter(Boolean);
       for (const stmt of statements) {
-        try {
-          db.exec(stmt);
-        } catch (e) {
-          // ignore if exists
-        }
+        try { db.exec(stmt); } catch {}
       }
-      // Try second migration for keyAttributes
-      if (fs.existsSync(migration2Path)) {
-        try {
-          const sql2 = fs.readFileSync(migration2Path, 'utf8');
-          const stmts2 = sql2.split(';').map(s => s.trim()).filter(Boolean);
-          for (const stmt of stmts2) {
-            try { db.exec(stmt); } catch {}
-          }
-        } catch {}
-      } else {
-        // ensure keyAttributes column
-        try {
-          const cols = db.prepare(`PRAGMA table_info(Customer)`).all() as any[];
-          const hasKey = cols.some((c: any) => c.name === 'keyAttributes');
-          if (!hasKey) {
-            db.exec(`ALTER TABLE Customer ADD COLUMN keyAttributes TEXT`);
-          }
-        } catch {}
-      }
-    } else {
-      // ensure keyAttributes exists even if tables exist
-      try {
-        const cols = db.prepare(`PRAGMA table_info(Customer)`).all() as any[];
-        const hasKey = cols.some((c: any) => c.name === 'keyAttributes');
-        if (!hasKey) {
-          db.exec(`ALTER TABLE Customer ADD COLUMN keyAttributes TEXT`);
-        }
-      } catch {}
     }
+
+    // Ensure keyAttributes column
+    try {
+      const cols = db.prepare(`PRAGMA table_info(Customer)`).all() as any[];
+      const hasKey = cols.some((c: any) => c.name === 'keyAttributes');
+      if (!hasKey) db.exec(`ALTER TABLE Customer ADD COLUMN keyAttributes TEXT`);
+      const hasGender = cols.some((c: any) => c.name === 'gender');
+      if (!hasGender) db.exec(`ALTER TABLE Customer ADD COLUMN gender TEXT`);
+      const hasRoom = cols.some((c: any) => c.name === 'room');
+      if (!hasRoom) db.exec(`ALTER TABLE Customer ADD COLUMN room TEXT`);
+      const hasPropId = cols.some((c: any) => c.name === 'propertyId');
+      if (!hasPropId) db.exec(`ALTER TABLE Customer ADD COLUMN propertyId TEXT`);
+    } catch {}
+
+    // Ensure SheetSource extra columns
+    try {
+      const cols = db.prepare(`PRAGMA table_info(SheetSource)`).all() as any[];
+      if (!cols.some((c: any) => c.name === 'propertyId')) db.exec(`ALTER TABLE SheetSource ADD COLUMN propertyId TEXT`);
+      if (!cols.some((c: any) => c.name === 'type')) db.exec(`ALTER TABLE SheetSource ADD COLUMN type TEXT DEFAULT 'customers'`);
+    } catch {}
+
+    // ── New multi-property tables ──
+    if (!tableNames.has('Property')) {
+      console.log('[prisma] Creating Property table...');
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS "Property" (
+          "id" TEXT NOT NULL PRIMARY KEY,
+          "name" TEXT NOT NULL,
+          "slug" TEXT NOT NULL,
+          "city" TEXT NOT NULL,
+          "country" TEXT NOT NULL DEFAULT 'India',
+          "address" TEXT,
+          "airbnbListingId" TEXT,
+          "airbnbUrl" TEXT,
+          "type" TEXT,
+          "bedrooms" INTEGER,
+          "beds" INTEGER,
+          "status" TEXT NOT NULL DEFAULT 'active',
+          "sheetUrl" TEXT,
+          "sheetId" TEXT,
+          "revenueSheetName" TEXT,
+          "expenseSheetName" TEXT,
+          "color" TEXT,
+          "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          "updatedAt" DATETIME NOT NULL
+        );
+      `);
+      db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS "Property_slug_key" ON "Property"("slug");`);
+      db.exec(`CREATE INDEX IF NOT EXISTS "Property_city_idx" ON "Property"("city");`);
+    }
+
+    if (!tableNames.has('Revenue')) {
+      console.log('[prisma] Creating Revenue table...');
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS "Revenue" (
+          "id" TEXT NOT NULL PRIMARY KEY,
+          "propertyId" TEXT NOT NULL,
+          "date" DATETIME NOT NULL,
+          "dateRaw" TEXT,
+          "bookingId" TEXT,
+          "guestName" TEXT,
+          "checkIn" DATETIME,
+          "checkOut" DATETIME,
+          "nights" INTEGER,
+          "room" TEXT,
+          "baseAmount" REAL,
+          "cleaningFee" REAL,
+          "extraGuestFee" REAL,
+          "taxes" REAL,
+          "discount" REAL,
+          "platformFee" REAL,
+          "payout" REAL,
+          "payment" REAL,
+          "netRevenue" REAL,
+          "gender" TEXT,
+          "duration" TEXT,
+          "paymentRaw" TEXT,
+          "channel" TEXT DEFAULT 'airbnb',
+          "status" TEXT DEFAULT 'confirmed',
+          "notes" TEXT,
+          "sheetRowKey" TEXT NOT NULL,
+          "source" TEXT,
+          "sourceUrl" TEXT,
+          "rawData" TEXT,
+          "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          "updatedAt" DATETIME NOT NULL,
+          CONSTRAINT "Revenue_propertyId_fkey" FOREIGN KEY ("propertyId") REFERENCES "Property" ("id") ON DELETE CASCADE ON UPDATE CASCADE
+        );
+      `);
+      db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS "Revenue_sheetRowKey_key" ON "Revenue"("sheetRowKey");`);
+      db.exec(`CREATE INDEX IF NOT EXISTS "Revenue_propertyId_idx" ON "Revenue"("propertyId");`);
+      db.exec(`CREATE INDEX IF NOT EXISTS "Revenue_date_idx" ON "Revenue"("date");`);
+    }
+
+    if (!tableNames.has('Expense')) {
+      console.log('[prisma] Creating Expense table...');
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS "Expense" (
+          "id" TEXT NOT NULL PRIMARY KEY,
+          "propertyId" TEXT NOT NULL,
+          "date" DATETIME NOT NULL,
+          "dateRaw" TEXT,
+          "category" TEXT NOT NULL,
+          "subcategory" TEXT,
+          "vendor" TEXT,
+          "amount" REAL NOT NULL,
+          "currency" TEXT NOT NULL DEFAULT 'INR',
+          "paymentMethod" TEXT,
+          "recurring" BOOLEAN NOT NULL DEFAULT false,
+          "recurringInterval" TEXT,
+          "receiptUrl" TEXT,
+          "notes" TEXT,
+          "sheetRowKey" TEXT NOT NULL,
+          "source" TEXT,
+          "sourceUrl" TEXT,
+          "rawData" TEXT,
+          "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          "updatedAt" DATETIME NOT NULL,
+          CONSTRAINT "Expense_propertyId_fkey" FOREIGN KEY ("propertyId") REFERENCES "Property" ("id") ON DELETE CASCADE ON UPDATE CASCADE
+        );
+      `);
+      db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS "Expense_sheetRowKey_key" ON "Expense"("sheetRowKey");`);
+      db.exec(`CREATE INDEX IF NOT EXISTS "Expense_propertyId_idx" ON "Expense"("propertyId");`);
+      db.exec(`CREATE INDEX IF NOT EXISTS "Expense_date_idx" ON "Expense"("date");`);
+      db.exec(`CREATE INDEX IF NOT EXISTS "Expense_category_idx" ON "Expense"("category");`);
+    }
+
+    if (!tableNames.has('Booking')) {
+      console.log('[prisma] Creating Booking table...');
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS "Booking" (
+          "id" TEXT NOT NULL PRIMARY KEY,
+          "propertyId" TEXT NOT NULL,
+          "bookingId" TEXT,
+          "guestName" TEXT NOT NULL,
+          "guestPhone" TEXT,
+          "guestEmail" TEXT,
+          "checkIn" DATETIME NOT NULL,
+          "checkOut" DATETIME NOT NULL,
+          "nights" INTEGER NOT NULL,
+          "guests" INTEGER,
+          "status" TEXT NOT NULL DEFAULT 'confirmed',
+          "totalAmount" REAL,
+          "source" TEXT DEFAULT 'airbnb',
+          "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          "updatedAt" DATETIME NOT NULL,
+          CONSTRAINT "Booking_propertyId_fkey" FOREIGN KEY ("propertyId") REFERENCES "Property" ("id") ON DELETE CASCADE ON UPDATE CASCADE
+        );
+      `);
+      db.exec(`CREATE INDEX IF NOT EXISTS "Booking_propertyId_idx" ON "Booking"("propertyId");`);
+    }
+
   } catch (e) {
     console.error('[prisma] ensureTables error', e);
   }
@@ -170,26 +289,30 @@ function toDate(v: any): Date | null {
 function convertRow(table: string, row: any): any {
   if (!row) return row;
   const r = { ...row };
-  // booleans
-  if (table === 'Customer') {
-    if ('phoneValid' in r) r.phoneValid = !!r.phoneValid;
-    if ('optInWhatsApp' in r) r.optInWhatsApp = !!r.optInWhatsApp;
-    if ('acquiredAt' in r) r.acquiredAt = r.acquiredAt ? toDate(r.acquiredAt) : null;
-    if ('createdAt' in r) r.createdAt = toDate(r.createdAt);
-    if ('updatedAt' in r) r.updatedAt = toDate(r.updatedAt);
-  } else if (table === 'SheetSource') {
-    if ('lastSyncedAt' in r) r.lastSyncedAt = r.lastSyncedAt ? toDate(r.lastSyncedAt) : null;
-    if ('createdAt' in r) r.createdAt = toDate(r.createdAt);
-    if ('updatedAt' in r) r.updatedAt = toDate(r.updatedAt);
-  } else if (table === 'Campaign') {
-    if ('createdAt' in r) r.createdAt = toDate(r.createdAt);
-    if ('updatedAt' in r) r.updatedAt = toDate(r.updatedAt);
-  } else if (table === 'MessageTemplate') {
-    if ('createdAt' in r) r.createdAt = toDate(r.createdAt);
-    if ('updatedAt' in r) r.updatedAt = toDate(r.updatedAt);
-  } else if (table === 'Delivery') {
-    if ('createdAt' in r) r.createdAt = toDate(r.createdAt);
-    if ('updatedAt' in r) r.updatedAt = toDate(r.updatedAt);
+  const dateFields: Record<string, string[]> = {
+    Customer: ['acquiredAt', 'createdAt', 'updatedAt'],
+    SheetSource: ['lastSyncedAt', 'createdAt', 'updatedAt'],
+    Campaign: ['createdAt', 'updatedAt'],
+    MessageTemplate: ['createdAt', 'updatedAt'],
+    Delivery: ['createdAt', 'updatedAt'],
+    Property: ['createdAt', 'updatedAt'],
+    Revenue: ['date', 'checkIn', 'checkOut', 'createdAt', 'updatedAt'],
+    Expense: ['date', 'createdAt', 'updatedAt'],
+    Booking: ['checkIn', 'checkOut', 'createdAt', 'updatedAt'],
+  };
+  const boolFields: Record<string, string[]> = {
+    Customer: ['phoneValid', 'optInWhatsApp'],
+    Expense: ['recurring'],
+  };
+  if (dateFields[table]) {
+    for (const f of dateFields[table]) {
+      if (f in r && r[f]) r[f] = toDate(r[f]);
+    }
+  }
+  if (boolFields[table]) {
+    for (const f of boolFields[table]) {
+      if (f in r) r[f] = !!r[f];
+    }
   }
   return r;
 }
@@ -199,7 +322,6 @@ function matchesOperator(rowVal: any, opObj: any): boolean {
     const val = opObj[op];
     if (op === 'in') {
       if (!Array.isArray(val)) return false;
-      // handle Date comparison for in?
       if (rowVal instanceof Date) {
         const rowTime = rowVal.getTime();
         const found = val.some((v: any) => {
@@ -254,18 +376,14 @@ function matchesWhere(row: any, where: any): boolean {
       continue;
     }
     if (typeof cond === 'object' && !(cond instanceof Date) && !Array.isArray(cond)) {
-      // check if it's operator object
       const ops = Object.keys(cond);
       const isOperator = ops.some(op => ['in', 'notIn', 'gte', 'lte', 'gt', 'lt', 'contains', 'startsWith', 'endsWith'].includes(op));
       if (isOperator) {
         if (!matchesOperator(rowVal, cond)) return false;
       } else {
-        // nested where? For simplicity treat as equality check for object
-        // Could be { id: { in: [...] } } already handled, else direct compare
         if (!matchesWhere(rowVal || {}, cond)) return false;
       }
     } else {
-      // direct equality, handle Date
       if (rowVal instanceof Date && cond instanceof Date) {
         if (rowVal.getTime() !== cond.getTime()) return false;
       } else if (rowVal instanceof Date && typeof cond === 'string') {
@@ -311,7 +429,6 @@ function filterSelect(row: any, select: any): any {
   return out;
 }
 
-// Generic table handler
 class Table<T> {
   constructor(private name: string) {}
 
@@ -320,26 +437,16 @@ class Table<T> {
       const rows = db.prepare(`SELECT * FROM "${this.name}"`).all() as any[];
       return rows.map(r => convertRow(this.name, r));
     } catch (e) {
-      // console.error(`[${this.name}] allRows error`, e);
       return [];
     }
   }
 
   async findMany(args: any = {}): Promise<any[]> {
     let rows = this.allRows();
-    if (args.where) {
-      rows = rows.filter(r => matchesWhere(r, args.where));
-    }
-    if (args.orderBy) {
-      rows = applyOrderBy(rows, args.orderBy);
-    }
-    if (args.select) {
-      rows = rows.map(r => filterSelect(r, args.select));
-    }
-    // include handling
-    if (args.include) {
-      rows = await this.applyInclude(rows, args.include);
-    }
+    if (args.where) rows = rows.filter(r => matchesWhere(r, args.where));
+    if (args.orderBy) rows = applyOrderBy(rows, args.orderBy);
+    if (args.select) rows = rows.map(r => filterSelect(r, args.select));
+    if (args.include) rows = await this.applyInclude(rows, args.include);
     return rows;
   }
 
@@ -375,22 +482,16 @@ class Table<T> {
     const data = args.data;
     const id = data.id || genId();
     const now = new Date().toISOString();
-    const row: any = {
-      id,
-      createdAt: now,
-      updatedAt: now,
-      ...data,
-    };
-    // Handle booleans to int
+    const row: any = { id, createdAt: now, updatedAt: now, ...data };
     if (this.name === 'Customer') {
       if ('phoneValid' in row) row.phoneValid = row.phoneValid ? 1 : 0;
       if ('optInWhatsApp' in row) row.optInWhatsApp = row.optInWhatsApp ? 1 : 0;
       if (row.acquiredAt instanceof Date) row.acquiredAt = row.acquiredAt.toISOString();
     }
-    if (row.createdAt instanceof Date) row.createdAt = row.createdAt.toISOString();
-    if (row.updatedAt instanceof Date) row.updatedAt = row.updatedAt.toISOString();
-    if (row.lastSyncedAt instanceof Date) row.lastSyncedAt = row.lastSyncedAt.toISOString();
-
+    if (this.name === 'Expense' && 'recurring' in row) row.recurring = row.recurring ? 1 : 0;
+    for (const k of ['createdAt', 'updatedAt', 'lastSyncedAt', 'date', 'checkIn', 'checkOut']) {
+      if (row[k] instanceof Date) row[k] = row[k].toISOString();
+    }
     const cols = Object.keys(row);
     const placeholders = cols.map(() => '?').join(', ');
     const colNames = cols.map(c => `"${c}"`).join(', ');
@@ -423,26 +524,20 @@ class Table<T> {
     const id = existing.id;
     const now = new Date().toISOString();
     const updated: any = { ...existing, ...data, updatedAt: now };
-
-    // handle increment
     for (const k of Object.keys(data)) {
       const v = data[k];
-      if (v && typeof v === 'object' && 'increment' in v) {
-        updated[k] = (existing[k] || 0) + v.increment;
-      }
+      if (v && typeof v === 'object' && 'increment' in v) updated[k] = (existing[k] || 0) + v.increment;
     }
-
-    // convert for storage
     const storage: any = { ...updated };
     if (this.name === 'Customer') {
       if ('phoneValid' in storage) storage.phoneValid = storage.phoneValid ? 1 : 0;
       if ('optInWhatsApp' in storage) storage.optInWhatsApp = storage.optInWhatsApp ? 1 : 0;
       if (storage.acquiredAt instanceof Date) storage.acquiredAt = storage.acquiredAt.toISOString();
     }
-    if (storage.createdAt instanceof Date) storage.createdAt = storage.createdAt.toISOString();
-    if (storage.updatedAt instanceof Date) storage.updatedAt = storage.updatedAt.toISOString();
-    if (storage.lastSyncedAt instanceof Date) storage.lastSyncedAt = storage.lastSyncedAt.toISOString();
-
+    if (this.name === 'Expense' && 'recurring' in storage) storage.recurring = storage.recurring ? 1 : 0;
+    for (const k of ['createdAt', 'updatedAt', 'lastSyncedAt', 'date', 'checkIn', 'checkOut']) {
+      if (storage[k] instanceof Date) storage[k] = storage[k].toISOString();
+    }
     const cols = Object.keys(storage).filter(c => c !== 'id');
     const setClause = cols.map(c => `"${c}" = ?`).join(', ');
     try {
@@ -483,10 +578,6 @@ class Table<T> {
   }
 
   private async applyInclude(rows: any[], include: any): Promise<any[]> {
-    // Campaign include template, deliveries
-    // Delivery include customer
-    // Customer include deliveries? not used
-    // SheetSource include customers? not used
     const result = [...rows];
     if (this.name === 'Campaign' && include.template) {
       const templateTable = new Table('MessageTemplate');
@@ -494,9 +585,7 @@ class Table<T> {
         if (r.templateId) {
           const t = await templateTable.findUnique({ where: { id: r.templateId } });
           (r as any).template = t;
-        } else {
-          (r as any).template = null;
-        }
+        } else (r as any).template = null;
       }
     }
     if (this.name === 'Campaign' && include.deliveries) {
@@ -513,11 +602,28 @@ class Table<T> {
         (r as any).customer = c;
       }
     }
-    if (this.name === 'Delivery' && include.campaign) {
-      const campTable = new Table('Campaign');
+    if (this.name === 'Revenue' && include.property) {
+      const propTable = new Table('Property');
       for (const r of result) {
-        const c = await campTable.findUnique({ where: { id: r.campaignId } });
-        (r as any).campaign = c;
+        const p = await propTable.findUnique({ where: { id: r.propertyId } });
+        (r as any).property = p;
+      }
+    }
+    if (this.name === 'Expense' && include.property) {
+      const propTable = new Table('Property');
+      for (const r of result) {
+        const p = await propTable.findUnique({ where: { id: r.propertyId } });
+        (r as any).property = p;
+      }
+    }
+    if (this.name === 'Property') {
+      if (include.revenues) {
+        const revTable = new Table('Revenue');
+        for (const r of result) (r as any).revenues = await revTable.findMany({ where: { propertyId: r.id } });
+      }
+      if (include.expenses) {
+        const expTable = new Table('Expense');
+        for (const r of result) (r as any).expenses = await expTable.findMany({ where: { propertyId: r.id } });
       }
     }
     return result;
@@ -530,10 +636,12 @@ export const prisma = {
   campaign: new Table('Campaign'),
   messageTemplate: new Table('MessageTemplate'),
   delivery: new Table('Delivery'),
+  property: new Table('Property'),
+  revenue: new Table('Revenue'),
+  expense: new Table('Expense'),
+  booking: new Table('Booking'),
   $connect: async () => {},
-  $disconnect: async () => {
-    try { db.close(); } catch {}
-  },
+  $disconnect: async () => { try { db.close(); } catch {} },
 };
 
 export async function ensurePrismaConnected() {

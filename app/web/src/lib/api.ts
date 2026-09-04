@@ -53,4 +53,53 @@ export const api = {
   setupStatus: () => req<any>('/setup/status'),
   testSheet: (url:string) => req<any>('/setup/test-sheet', { method:'POST', body: JSON.stringify({ url })}),
   testWhatsapp: (to?:string) => req<any>('/setup/test-whatsapp', { method:'POST', body: JSON.stringify({ to })}),
+
+  // ── Multi-Property OS ──
+  properties: () => req<any[]>('/properties'),
+  createProperty: (body:any) => req<any>('/properties', { method:'POST', body: JSON.stringify(body)}),
+  getProperty: (id:string) => req<any>(`/properties/${id}`),
+  updateProperty: (id:string, body:any) => req<any>(`/properties/${id}`, { method:'PATCH', body: JSON.stringify(body)}),
+  deleteProperty: (id:string) => req<any>(`/properties/${id}`, { method:'DELETE' }),
+  cities: () => req<any[]>('/cities'),
+
+  revenues: (params: Record<string,any>={}) => {
+    const sp = new URLSearchParams();
+    Object.entries(params).forEach(([k,v])=>{ if(v!==undefined&&v!==null&&v!=='') sp.set(k, String(v)); });
+    return req<any>(`/revenues?${sp.toString()}`);
+  },
+  createRevenue: (body:any) => req<any>('/revenues', { method:'POST', body: JSON.stringify(body)}),
+  updateRevenue: (id:string, body:any) => req<any>(`/revenues/${id}`, { method:'PATCH', body: JSON.stringify(body)}),
+  deleteRevenue: (id:string) => req<any>(`/revenues/${id}`, { method:'DELETE' }),
+
+  expenses: (params: Record<string,any>={}) => {
+    const sp = new URLSearchParams();
+    Object.entries(params).forEach(([k,v])=>{ if(v!==undefined&&v!==null&&v!=='') sp.set(k, String(v)); });
+    return req<any>(`/expenses?${sp.toString()}`);
+  },
+  createExpense: (body:any) => req<any>('/expenses', { method:'POST', body: JSON.stringify(body)}),
+  updateExpense: (id:string, body:any) => req<any>(`/expenses/${id}`, { method:'PATCH', body: JSON.stringify(body)}),
+  deleteExpense: (id:string) => req<any>(`/expenses/${id}`, { method:'DELETE' }),
+  expenseCategories: () => req<string[]>('/expenses/categories'),
+
+  pnl: (params: Record<string,any>={}) => {
+    const sp = new URLSearchParams();
+    Object.entries(params).forEach(([k,v])=>{ if(v!==undefined&&v!==null&&v!=='') sp.set(k, String(v)); });
+    return req<any>(`/reports/pnl?${sp.toString()}`);
+  },
+  dashboard: (params: Record<string,any>={}) => {
+    const sp = new URLSearchParams();
+    Object.entries(params).forEach(([k,v])=>{ if(v!==undefined&&v!==null&&v!=='') sp.set(k, String(v)); });
+    return req<any>(`/reports/dashboard?${sp.toString()}`);
+  },
+  propertyReport: (id:string, params: Record<string,any>={}) => {
+    const sp = new URLSearchParams();
+    Object.entries(params).forEach(([k,v])=>{ if(v!==undefined&&v!==null&&v!=='') sp.set(k, String(v)); });
+    return req<any>(`/reports/property/${id}?${sp.toString()}`);
+  },
+  cityReport: (city:string, params: Record<string,any>={}) => {
+    const sp = new URLSearchParams();
+    Object.entries(params).forEach(([k,v])=>{ if(v!==undefined&&v!==null&&v!=='') sp.set(k, String(v)); });
+    return req<any>(`/reports/city/${encodeURIComponent(city)}?${sp.toString()}`);
+  },
+  ingestXlsx: (body:any={}) => req<any>('/ingest/xlsx', { method:'POST', body: JSON.stringify(body)}),
 };
